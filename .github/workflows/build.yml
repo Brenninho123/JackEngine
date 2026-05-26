@@ -1,4 +1,4 @@
-name: Build Android
+name: Build
 
 on:
   push:
@@ -8,6 +8,61 @@ on:
   workflow_dispatch:
 
 jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Prepare Directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build
+          New-Item -ItemType Directory -Force dist
+
+      - name: Compile Engine
+        shell: pwsh
+        run: |
+          $sources = Get-ChildItem -Recurse -Filter "*.java" -Exclude "Main.java" | Where-Object { $_.FullName -notlike "*\android\*" } | Select-Object -ExpandProperty FullName
+          $sources += "Main.java"
+          $sources | Out-File -Encoding UTF8 sources.txt
+          javac -d build @sources.txt
+
+      - name: Copy Assets
+        shell: pwsh
+        run: |
+          if (Test-Path assets) { Copy-Item assets build/assets -Recurse -Force }
+          if (Test-Path arts)   { Copy-Item arts build/arts -Recurse -Force }
+          if (Test-Path config.json) { Copy-Item config.json build/config.json -Force }
+
+      - name: Package Jar
+        shell: pwsh
+        run: |
+          "Main-Class: Main`n" | Out-File -Encoding ASCII manifest.txt
+          jar cfm JackEngine.jar manifest.txt -C build .
+
+      - name: Build EXE
+        shell: pwsh
+        run: |
+          jpackage `
+            --type exe `
+            --name "JackEngine" `
+            --input . `
+            --main-jar JackEngine.jar `
+            --main-class Main `
+            --dest dist
+
+      - name: Upload EXE
+        uses: actions/upload-artifact@v4
+        with:
+          name: JackEngine-Windows
+          path: dist/
+
   build-android:
     runs-on: ubuntu-latest
 
@@ -32,7 +87,7 @@ jobs:
 
       - name: Prepare Directories
         run: |
-          mkdir -p android/app/src/main/java
+          mkdir -p android/app/src/main/java/source/mobile
           mkdir -p android/app/src/main/res/drawable
           mkdir -p android/app/src/main/assets
 
@@ -40,21 +95,23 @@ jobs:
         run: |
           cp Project.java android/app/src/main/java/Project.java
           find source -name "*.java" -not -name "Main.java" | while read f; do
-            dest="android/app/src/main/java/$(basename $f)"
+            rel="${f#source/}"
+            dest="android/app/src/main/java/source/${rel}"
+            mkdir -p "$(dirname "$dest")"
             cp "$f" "$dest"
           done
 
       - name: Copy Assets
         run: |
           cp -r assets/. android/app/src/main/assets/ 2>/dev/null || true
-          cp -r arts/. android/app/src/main/res/drawable/ 2>/dev/null || true
+          cp -r arts/.   android/app/src/main/res/drawable/ 2>/dev/null || true
+          cp config.json android/app/src/main/assets/config.json 2>/dev/null || true
 
       - name: Generate Scene
         run: |
           cat > android/app/src/main/java/Scene.java <<'EOF'
           import android.graphics.Canvas;
           import android.view.KeyEvent;
-          import android.view.MotionEvent;
 
           public class Scene
           {
@@ -89,11 +146,10 @@ jobs:
               public float touchX;
               public float touchY;
 
-              private final Set<Integer> keysDown = new HashSet<>();
-              private final Set<Integer> keysJustPressed = new HashSet<>();
+              private final Set<Integer> keysDown         = new HashSet<>();
+              private final Set<Integer> keysJustPressed  = new HashSet<>();
               private final Set<Integer> keysJustReleased = new HashSet<>();
-
-              private final Set<Integer> pointersDown = new HashSet<>();
+              private final Set<Integer> pointersDown     = new HashSet<>();
 
               public void update()
               {
@@ -135,11 +191,11 @@ jobs:
                   touchY = y;
               }
 
-              public boolean isKeyDown(int keyCode) { return keysDown.contains(keyCode); }
+              public boolean isKeyDown(int keyCode)        { return keysDown.contains(keyCode); }
               public boolean isKeyJustPressed(int keyCode) { return keysJustPressed.contains(keyCode); }
-              public boolean isKeyJustReleased(int keyCode) { return keysJustReleased.contains(keyCode); }
-              public boolean isTouching() { return !pointersDown.isEmpty(); }
-              public boolean isTouching(int pointer) { return pointersDown.contains(pointer); }
+              public boolean isKeyJustReleased(int keyCode){ return keysJustReleased.contains(keyCode); }
+              public boolean isTouching()                  { return !pointersDown.isEmpty(); }
+              public boolean isTouching(int pointer)       { return pointersDown.contains(pointer); }
 
               public void clear()
               {
@@ -162,6 +218,8 @@ jobs:
           import android.view.SurfaceHolder;
           import android.view.SurfaceView;
 
+          import source.mobile.MobileSystem;
+
           public class Main extends SurfaceView implements SurfaceHolder.Callback, Runnable
           {
               public static Main instance;
@@ -172,13 +230,16 @@ jobs:
               public static int framerate;
 
               public static boolean running;
-              public static boolean mobile = true;
+              public static boolean mobile  = true;
               public static boolean focused = true;
+              public static boolean paused  = false;
 
               public static long currentFrame;
               public static long engineStartTime;
+              public static double deltaTime;
 
               public static Scene currentScene;
+              public static Scene pendingScene;
 
               public static final Input input = new Input();
 
@@ -196,10 +257,11 @@ jobs:
 
                   instance = this;
 
-                  width = project.width;
-                  height = project.height;
+                  width     = project.width;
+                  height    = project.height;
                   framerate = project.framerate;
-                  running = true;
+                  running   = true;
+
                   engineStartTime = System.currentTimeMillis();
 
                   surfaceHolder = getHolder();
@@ -207,6 +269,15 @@ jobs:
 
                   setFocusable(true);
                   setFocusableInTouchMode(true);
+
+                  MobileSystem.initialize(
+                      width,
+                      height,
+                      project.landscapeMode,
+                      project.autoMobileScaling,
+                      project.touchControls,
+                      project.mobileShaders
+                  );
 
                   initialize();
               }
@@ -219,18 +290,20 @@ jobs:
               @Override
               public void surfaceCreated(SurfaceHolder holder)
               {
-                  running = true;
-
+                  running    = true;
                   gameThread = new Thread(this);
                   gameThread.setDaemon(true);
+                  gameThread.setName("JackEngine-Loop");
                   gameThread.start();
               }
 
               @Override
               public void surfaceChanged(SurfaceHolder holder, int format, int w, int h)
               {
-                  width = w;
+                  width  = w;
                   height = h;
+
+                  MobileSystem.resize(w, h);
               }
 
               @Override
@@ -251,22 +324,30 @@ jobs:
               @Override
               public void run()
               {
-                  long targetFrameNanos = 1_000_000_000L / framerate;
-                  long lastTime = System.nanoTime();
-                  double delta = 0;
+                  long targetNanos = 1_000_000_000L / framerate;
+                  long lastTime    = System.nanoTime();
+                  double delta     = 0;
 
                   while (running)
                   {
-                      long now = System.nanoTime();
-                      delta += (now - lastTime) / (double) targetFrameNanos;
-                      lastTime = now;
+                      long now     = System.nanoTime();
+                      long elapsed = now - lastTime;
+                      lastTime     = now;
+
+                      delta    += elapsed / (double) targetNanos;
+                      deltaTime = elapsed / 1_000_000_000.0;
 
                       if (delta >= 1)
                       {
-                          delta--;
+                          delta = Math.min(delta - 1, 1);
 
-                          input.update();
-                          update();
+                          if (!paused)
+                          {
+                              flushPendingScene();
+                              input.update();
+                              update();
+                          }
+
                           render();
 
                           currentFrame++;
@@ -281,6 +362,18 @@ jobs:
                           Thread.currentThread().interrupt();
                       }
                   }
+              }
+
+              private void flushPendingScene()
+              {
+                  if (pendingScene == null)
+                      return;
+
+                  if (currentScene != null)
+                      currentScene.destroy();
+
+                  currentScene = pendingScene;
+                  pendingScene = null;
               }
 
               private void update()
@@ -300,8 +393,18 @@ jobs:
                   {
                       canvas.drawColor(Color.BLACK);
 
+                      if (MobileSystem.autoScaling)
+                      {
+                          canvas.save();
+                          canvas.translate(MobileSystem.offsetX, MobileSystem.offsetY);
+                          canvas.scale(MobileSystem.scale, MobileSystem.scale);
+                      }
+
                       if (currentScene != null)
                           currentScene.render(canvas);
+
+                      if (MobileSystem.autoScaling)
+                          canvas.restore();
                   }
                   finally
                   {
@@ -312,10 +415,13 @@ jobs:
               @Override
               public boolean onKeyDown(int keyCode, KeyEvent event)
               {
-                  input.onKeyPressed(keyCode);
+                  if (!paused)
+                  {
+                      input.onKeyPressed(keyCode);
 
-                  if (currentScene != null)
-                      currentScene.keyPressed(keyCode, event);
+                      if (currentScene != null)
+                          currentScene.keyPressed(keyCode, event);
+                  }
 
                   return true;
               }
@@ -334,53 +440,61 @@ jobs:
               @Override
               public boolean onTouchEvent(MotionEvent event)
               {
-                  int action = event.getActionMasked();
-                  int pointer = event.getActionIndex();
-                  float x = event.getX(pointer);
-                  float y = event.getY(pointer);
+                  if (paused)
+                      return true;
+
+                  int action  = event.getActionMasked();
+                  int index   = event.getActionIndex();
+                  int pointer = event.getPointerId(index);
+                  float x     = event.getX(index);
+                  float y     = event.getY(index);
 
                   if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN)
                   {
+                      MobileSystem.onTouchDown(pointer, x, y);
                       input.onTouchDown(x, y, pointer);
 
                       if (currentScene != null)
-                          currentScene.touchDown(x, y, pointer);
+                          currentScene.touchDown(MobileSystem.toScreenX(x), MobileSystem.toScreenY(y), pointer);
                   }
                   else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
                   {
+                      MobileSystem.onTouchUp(pointer, x, y);
                       input.onTouchUp(x, y, pointer);
 
                       if (currentScene != null)
-                          currentScene.touchUp(x, y, pointer);
+                          currentScene.touchUp(MobileSystem.toScreenX(x), MobileSystem.toScreenY(y), pointer);
                   }
                   else if (action == MotionEvent.ACTION_MOVE)
                   {
-                      input.onTouchDragged(x, y, pointer);
+                      for (int i = 0; i < event.getPointerCount(); i++)
+                      {
+                          int pid  = event.getPointerId(i);
+                          float px = event.getX(i);
+                          float py = event.getY(i);
 
-                      if (currentScene != null)
-                          currentScene.touchDragged(x, y, pointer);
+                          MobileSystem.onTouchDragged(pid, px, py);
+                          input.onTouchDragged(px, py, pid);
+
+                          if (currentScene != null)
+                              currentScene.touchDragged(MobileSystem.toScreenX(px), MobileSystem.toScreenY(py), pid);
+                      }
+                  }
+                  else if (action == MotionEvent.ACTION_CANCEL)
+                  {
+                      MobileSystem.clearPointers();
+                      input.clear();
                   }
 
                   return true;
               }
 
-              public static void switchScene(Scene scene)
-              {
-                  if (currentScene != null)
-                      currentScene.destroy();
-
-                  currentScene = scene;
-              }
-
-              public static long getEngineUptime()
-              {
-                  return System.currentTimeMillis() - engineStartTime;
-              }
-
-              public static void shutdown()
-              {
-                  running = false;
-              }
+              public static void switchScene(Scene scene)  { pendingScene = scene; }
+              public static void pause()                   { paused = true; }
+              public static void resume()                  { paused = false; }
+              public static long getEngineUptime()         { return System.currentTimeMillis() - engineStartTime; }
+              public static double getDeltaTime()          { return deltaTime; }
+              public static void shutdown()                { running = false; }
           }
           EOF
 
@@ -417,6 +531,7 @@ jobs:
                   super.onPause();
                   Main.running = false;
                   Main.focused = false;
+                  Main.paused  = true;
                   Main.input.clear();
               }
 
@@ -426,6 +541,7 @@ jobs:
                   super.onResume();
                   Main.running = true;
                   Main.focused = true;
+                  Main.paused  = false;
 
                   if (Main.instance != null)
                       Main.instance.getHolder().addCallback(Main.instance);
@@ -531,6 +647,12 @@ jobs:
                   sourceCompatibility JavaVersion.VERSION_11
                   targetCompatibility JavaVersion.VERSION_11
               }
+
+              sourceSets {
+                  main {
+                      java.srcDirs = ['src/main/java']
+                  }
+              }
           }
           EOF
 
@@ -563,5 +685,5 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: JackEngine-APK
+          name: JackEngine-Android
           path: android/app/build/outputs/apk/debug/*.apk
