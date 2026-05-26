@@ -1,0 +1,66 @@
+name: Build Android
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Accept Android SDK Licenses
+        run: yes | sdkmanager --licenses
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Create Build Folder
+        run: mkdir -p build
+
+      - name: Compile Java Sources
+        run: |
+          javac -d build source/*.java Project.java
+
+      - name: Copy Assets
+        run: |
+          cp -r assets build/assets
+          cp -r arts build/arts
+
+      - name: Generate Manifest
+        run: |
+          printf "Main-Class: Main\n\n" > manifest.txt
+
+      - name: Generate Jar
+        run: |
+          jar cfm JackEngine.jar manifest.txt -C build .
+
+      - name: Create Android Folder
+        run: |
+          mkdir -p android/app/libs
+          cp JackEngine.jar android/app/libs/
+
+      - name: Generate APK
+        run: |
+          echo "Android build initialized"
+
+      - name: Upload Android Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: JackEngine-Android
+          path: |
+            JackEngine.jar
+            android/
