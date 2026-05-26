@@ -3,102 +3,107 @@ import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
 import javax.swing.Timer;
 
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
 import java.awt.RenderingHints;
-import java.awt.Color;
 
+import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.awt.event.KeyListener;
 
-public class Main extends JPanel implements KeyListener
+public class Main extends JPanel
 {
     public static JFrame window;
-
     public static Project project;
-
     public static Main instance;
 
     public static int width;
     public static int height;
-
     public static int framerate;
 
     public static boolean running;
-
     public static boolean mobile;
 
     public static long currentFrame;
     public static long engineStartTime;
 
-    public static String engineName = "Jack Engine";
-    public static String engineVersion = "0.1.0";
-
     public static Scene currentScene;
 
     private Timer gameLoop;
+
+    static
+    {
+        project = new Project();
+    }
 
     public Main()
     {
         instance = this;
 
-        project = new Project();
-
         width = project.width;
         height = project.height;
-
         framerate = project.framerate;
-
         mobile = detectMobile();
-
         running = true;
-
         engineStartTime = System.currentTimeMillis();
 
         setPreferredSize(new Dimension(width, height));
-
         setFocusable(true);
 
-        addKeyListener(this);
+        addKeyListener(new KeyAdapter()
+        {
+            @Override
+            public void keyPressed(KeyEvent e)
+            {
+                if (currentScene != null)
+                    currentScene.keyPressed(e);
+            }
+
+            @Override
+            public void keyReleased(KeyEvent e)
+            {
+                if (currentScene != null)
+                    currentScene.keyReleased(e);
+            }
+        });
 
         initialize();
 
-        int delay = 1000 / framerate;
-
-        gameLoop = new Timer(delay, e ->
+        gameLoop = new Timer(1000 / framerate, e ->
         {
-            if(running)
+            if (running)
             {
                 update();
                 repaint();
             }
         });
 
+        gameLoop.setCoalesce(true);
         gameLoop.start();
     }
 
-    public void initialize()
+    private void initialize()
     {
         currentScene = new Scene();
     }
 
-    public boolean detectMobile()
+    private static boolean detectMobile()
     {
-        String os = System.getProperty("os.name").toLowerCase();
+        if (!project.mobileSupport)
+            return false;
 
-        return os.contains("android")
-            || os.contains("ios");
+        String os = System.getProperty("os.name", "").toLowerCase();
+
+        return os.contains("android") || os.contains("ios");
     }
 
-    public void update()
+    private void update()
     {
         currentFrame++;
 
-        if(currentScene != null)
-        {
+        if (currentScene != null)
             currentScene.update();
-        }
     }
 
     @Override
@@ -106,25 +111,24 @@ public class Main extends JPanel implements KeyListener
     {
         super.paintComponent(graphics);
 
-        Graphics2D g = (Graphics2D)graphics;
+        Graphics2D g = (Graphics2D) graphics;
 
-        g.setRenderingHint(
-            RenderingHints.KEY_ANTIALIASING,
-            RenderingHints.VALUE_ANTIALIAS_ON
-        );
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 
-        g.setColor(Color.black);
+        g.setColor(Color.BLACK);
         g.fillRect(0, 0, width, height);
 
-        if(currentScene != null)
-        {
+        if (currentScene != null)
             currentScene.render(g);
-        }
     }
 
-    public static void switchScene(Scene newScene)
+    public static void switchScene(Scene scene)
     {
-        currentScene = newScene;
+        if (currentScene != null)
+            currentScene.destroy();
+
+        currentScene = scene;
     }
 
     public static long getEngineUptime()
@@ -135,28 +139,8 @@ public class Main extends JPanel implements KeyListener
     public static void shutdown()
     {
         running = false;
-
         window.dispose();
-
         System.exit(0);
-    }
-
-    @Override
-    public void keyTyped(KeyEvent e)
-    {
-
-    }
-
-    @Override
-    public void keyPressed(KeyEvent e)
-    {
-
-    }
-
-    @Override
-    public void keyReleased(KeyEvent e)
-    {
-
     }
 
     public static void main(String[] args)
@@ -168,29 +152,26 @@ public class Main extends JPanel implements KeyListener
             Main runtime = new Main();
 
             window.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-
             window.setResizable(false);
-
             window.add(runtime);
-
             window.pack();
-
             window.setLocationRelativeTo(null);
-
             window.setVisible(true);
+
+            runtime.requestFocusInWindow();
         });
     }
 }
 
 class Scene
 {
-    public void update()
-    {
+    public void update() {}
 
-    }
+    public void render(Graphics2D g) {}
 
-    public void render(Graphics2D g)
-    {
+    public void keyPressed(KeyEvent e) {}
 
-    }
+    public void keyReleased(KeyEvent e) {}
+
+    public void destroy() {}
 }
