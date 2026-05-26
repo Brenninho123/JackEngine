@@ -5,14 +5,10 @@ import javax.swing.SwingUtilities;
 import java.awt.Color;
 import java.awt.Cursor;
 import java.awt.Dimension;
-import java.awt.DisplayMode;
 import java.awt.Graphics;
 import java.awt.Graphics2D;
-import java.awt.GraphicsDevice;
-import java.awt.GraphicsEnvironment;
 import java.awt.Image;
 import java.awt.RenderingHints;
-import java.awt.Toolkit;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
 import java.awt.event.MouseAdapter;
@@ -21,15 +17,19 @@ import java.awt.event.MouseWheelEvent;
 import java.awt.event.WindowAdapter;
 import java.awt.event.WindowEvent;
 import java.awt.image.BufferedImage;
+import java.awt.GraphicsDevice;
+import java.awt.GraphicsEnvironment;
+import java.awt.DisplayMode;
 
 import java.io.File;
+import java.io.IOException;
 
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 
 import javax.imageio.ImageIO;
+
+import source.mobile.MobileSystem;
 
 public class Main extends JPanel implements Runnable
 {
@@ -44,11 +44,14 @@ public class Main extends JPanel implements Runnable
     public static boolean running;
     public static boolean mobile;
     public static boolean focused;
+    public static boolean paused;
 
     public static long currentFrame;
     public static long engineStartTime;
+    public static double deltaTime;
 
     public static Scene currentScene;
+    public static Scene pendingScene;
 
     public static final Input input = new Input();
     public static final Platform platform = new Platform();
@@ -66,26 +69,52 @@ public class Main extends JPanel implements Runnable
     {
         instance = this;
 
-        width = project.width;
-        height = project.height;
+        width     = project.width;
+        height    = project.height;
         framerate = project.framerate;
-        mobile = platform.isMobile() && project.mobileSupport;
-        running = true;
-        focused = true;
+        mobile    = platform.isMobile() && project.mobileSupport;
+        running   = true;
+        focused   = true;
+        paused    = false;
+
         engineStartTime = System.currentTimeMillis();
 
         setPreferredSize(new Dimension(width, height));
         setFocusable(true);
         setBackground(Color.BLACK);
+        setDoubleBuffered(false);
 
-        backBuffer = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        backBuffer   = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
         backGraphics = backBuffer.createGraphics();
 
+        if (mobile)
+        {
+            MobileSystem.initialize(
+                width,
+                height,
+                project.landscapeMode,
+                project.autoMobileScaling,
+                project.touchControls,
+                project.mobileShaders
+            );
+
+            MobileSystem.resize(width, height);
+        }
+
+        registerListeners();
+        initialize();
+    }
+
+    private void registerListeners()
+    {
         addKeyListener(new KeyAdapter()
         {
             @Override
             public void keyPressed(KeyEvent e)
             {
+                if (paused)
+                    return;
+
                 input.onKeyPressed(e.getKeyCode());
 
                 if (currentScene != null)
@@ -107,7 +136,13 @@ public class Main extends JPanel implements Runnable
             @Override
             public void mousePressed(MouseEvent e)
             {
+                if (paused)
+                    return;
+
                 input.onMousePressed(e.getButton());
+
+                if (mobile)
+                    MobileSystem.onTouchDown(0, e.getX(), e.getY());
 
                 if (currentScene != null)
                     currentScene.mousePressed(e);
@@ -117,6 +152,9 @@ public class Main extends JPanel implements Runnable
             public void mouseReleased(MouseEvent e)
             {
                 input.onMouseReleased(e.getButton());
+
+                if (mobile)
+                    MobileSystem.onTouchUp(0, e.getX(), e.getY());
 
                 if (currentScene != null)
                     currentScene.mouseReleased(e);
@@ -130,6 +168,9 @@ public class Main extends JPanel implements Runnable
             {
                 input.mouseX = e.getX();
                 input.mouseY = e.getY();
+
+                if (mobile)
+                    MobileSystem.onTouchDragged(0, e.getX(), e.getY());
             }
 
             @Override
@@ -137,6 +178,9 @@ public class Main extends JPanel implements Runnable
             {
                 input.mouseX = e.getX();
                 input.mouseY = e.getY();
+
+                if (mobile)
+                    MobileSystem.onTouchDragged(0, e.getX(), e.getY());
             }
         });
 
@@ -147,8 +191,6 @@ public class Main extends JPanel implements Runnable
             if (currentScene != null)
                 currentScene.mouseScrolled(e);
         });
-
-        initialize();
     }
 
     private void initialize()
@@ -160,28 +202,37 @@ public class Main extends JPanel implements Runnable
     {
         gameThread = new Thread(this);
         gameThread.setDaemon(true);
+        gameThread.setName("JackEngine-Loop");
         gameThread.start();
     }
 
     @Override
     public void run()
     {
-        long targetFrameNanos = 1_000_000_000L / framerate;
-        long lastTime = System.nanoTime();
-        double delta = 0;
+        long targetNanos = 1_000_000_000L / framerate;
+        long lastTime    = System.nanoTime();
+        double delta     = 0;
 
         while (running)
         {
             long now = System.nanoTime();
-            delta += (now - lastTime) / (double) targetFrameNanos;
+            long elapsed = now - lastTime;
             lastTime = now;
+
+            delta     += elapsed / (double) targetNanos;
+            deltaTime  = elapsed / 1_000_000_000.0;
 
             if (delta >= 1)
             {
-                delta--;
+                delta = Math.min(delta - 1, 1);
 
-                input.update();
-                update();
+                if (!paused)
+                {
+                    flushPendingScene();
+                    input.update();
+                    update();
+                }
+
                 renderToBuffer();
                 repaint();
 
@@ -199,6 +250,18 @@ public class Main extends JPanel implements Runnable
         }
     }
 
+    private void flushPendingScene()
+    {
+        if (pendingScene == null)
+            return;
+
+        if (currentScene != null)
+            currentScene.destroy();
+
+        currentScene  = pendingScene;
+        pendingScene  = null;
+    }
+
     private void update()
     {
         if (currentScene != null)
@@ -207,15 +270,33 @@ public class Main extends JPanel implements Runnable
 
     private void renderToBuffer()
     {
-        backGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-        backGraphics.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
-        backGraphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        applyRenderingHints();
 
         backGraphics.setColor(Color.BLACK);
         backGraphics.fillRect(0, 0, width, height);
 
+        if (mobile && MobileSystem.autoScaling)
+        {
+            backGraphics.translate(MobileSystem.offsetX, MobileSystem.offsetY);
+            backGraphics.scale(MobileSystem.scale, MobileSystem.scale);
+        }
+
         if (currentScene != null)
             currentScene.render(backGraphics);
+
+        if (mobile && MobileSystem.autoScaling)
+        {
+            backGraphics.scale(1f / MobileSystem.scale, 1f / MobileSystem.scale);
+            backGraphics.translate(-MobileSystem.offsetX, -MobileSystem.offsetY);
+        }
+    }
+
+    private void applyRenderingHints()
+    {
+        backGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING,      RenderingHints.VALUE_ANTIALIAS_ON);
+        backGraphics.setRenderingHint(RenderingHints.KEY_RENDERING,         RenderingHints.VALUE_RENDER_QUALITY);
+        backGraphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+        backGraphics.setRenderingHint(RenderingHints.KEY_INTERPOLATION,     RenderingHints.VALUE_INTERPOLATION_BILINEAR);
     }
 
     @Override
@@ -229,21 +310,23 @@ public class Main extends JPanel implements Runnable
 
     public static void switchScene(Scene scene)
     {
-        if (currentScene != null)
-            currentScene.destroy();
-
-        currentScene = scene;
+        pendingScene = scene;
     }
 
-    public static long getEngineUptime()
+    public static void pause()
     {
-        return System.currentTimeMillis() - engineStartTime;
+        paused = true;
+    }
+
+    public static void resume()
+    {
+        paused = false;
     }
 
     public static void hideCursor()
     {
-        BufferedImage blank = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
-        Cursor invisible = Toolkit.getDefaultToolkit().createCustomCursor(blank, new java.awt.Point(0, 0), "invisible");
+        BufferedImage blank    = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB);
+        Cursor invisible       = java.awt.Toolkit.getDefaultToolkit().createCustomCursor(blank, new java.awt.Point(0, 0), "invisible");
         window.setCursor(invisible);
     }
 
@@ -270,11 +353,56 @@ public class Main extends JPanel implements Runnable
         }
     }
 
+    public static void setWindowSize(int w, int h)
+    {
+        width  = w;
+        height = h;
+
+        instance.setPreferredSize(new Dimension(w, h));
+        window.pack();
+        window.setLocationRelativeTo(null);
+
+        instance.backBuffer   = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);
+        instance.backGraphics = instance.backBuffer.createGraphics();
+
+        if (mobile)
+            MobileSystem.resize(w, h);
+    }
+
+    public static long getEngineUptime()
+    {
+        return System.currentTimeMillis() - engineStartTime;
+    }
+
+    public static double getDeltaTime()
+    {
+        return deltaTime;
+    }
+
     public static void shutdown()
     {
         running = false;
         window.dispose();
         System.exit(0);
+    }
+
+    private static void loadWindowIcon()
+    {
+        try
+        {
+            File iconFile = new File(project.iconPath);
+
+            if (!iconFile.exists())
+                return;
+
+            Image icon = ImageIO.read(iconFile);
+
+            List<Image> icons = new ArrayList<>();
+            icons.add(icon);
+
+            window.setIconImages(icons);
+        }
+        catch (IOException e) {}
     }
 
     public static void main(String[] args)
@@ -308,12 +436,14 @@ public class Main extends JPanel implements Runnable
                 public void windowIconified(WindowEvent e)
                 {
                     focused = false;
+                    paused  = true;
                 }
 
                 @Override
                 public void windowDeiconified(WindowEvent e)
                 {
                     focused = true;
+                    paused  = false;
                 }
 
                 @Override
@@ -327,6 +457,9 @@ public class Main extends JPanel implements Runnable
                 {
                     focused = false;
                     input.clear();
+
+                    if (mobile)
+                        MobileSystem.clearPointers();
                 }
             });
 
@@ -336,29 +469,9 @@ public class Main extends JPanel implements Runnable
                 setFullscreen(true);
 
             window.setVisible(true);
-
             runtime.requestFocusInWindow();
             runtime.startLoop();
         });
-    }
-
-    private static void loadWindowIcon()
-    {
-        try
-        {
-            File iconFile = new File(project.iconPath);
-
-            if (!iconFile.exists())
-                return;
-
-            Image icon = ImageIO.read(iconFile);
-
-            List<Image> icons = new ArrayList<>();
-            icons.add(icon);
-
-            window.setIconImages(icons);
-        }
-        catch (Exception e) {}
     }
 }
 
@@ -389,13 +502,12 @@ class Input
     public int mouseY;
     public int mouseScroll;
 
-    private final Set<Integer> keysPressed = new HashSet<>();
-    private final Set<Integer> keysJustPressed = new HashSet<>();
-    private final Set<Integer> keysJustReleased = new HashSet<>();
-
-    private final Set<Integer> mousePressed = new HashSet<>();
-    private final Set<Integer> mouseJustPressed = new HashSet<>();
-    private final Set<Integer> mouseJustReleased = new HashSet<>();
+    private final java.util.Set<Integer> keysDown         = new java.util.HashSet<>();
+    private final java.util.Set<Integer> keysJustPressed  = new java.util.HashSet<>();
+    private final java.util.Set<Integer> keysJustReleased = new java.util.HashSet<>();
+    private final java.util.Set<Integer> mouseDown        = new java.util.HashSet<>();
+    private final java.util.Set<Integer> mouseJustPressed = new java.util.HashSet<>();
+    private final java.util.Set<Integer> mouseJustReleased= new java.util.HashSet<>();
 
     public void update()
     {
@@ -406,70 +518,47 @@ class Input
         mouseScroll = 0;
     }
 
-    public void onKeyPressed(int keyCode)
+    public void onKeyPressed(int code)
     {
-        if (!keysPressed.contains(keyCode))
-            keysJustPressed.add(keyCode);
+        if (!keysDown.contains(code))
+            keysJustPressed.add(code);
 
-        keysPressed.add(keyCode);
+        keysDown.add(code);
     }
 
-    public void onKeyReleased(int keyCode)
+    public void onKeyReleased(int code)
     {
-        keysPressed.remove(keyCode);
-        keysJustReleased.add(keyCode);
+        keysDown.remove(code);
+        keysJustReleased.add(code);
     }
 
     public void onMousePressed(int button)
     {
-        if (!mousePressed.contains(button))
+        if (!mouseDown.contains(button))
             mouseJustPressed.add(button);
 
-        mousePressed.add(button);
+        mouseDown.add(button);
     }
 
     public void onMouseReleased(int button)
     {
-        mousePressed.remove(button);
+        mouseDown.remove(button);
         mouseJustReleased.add(button);
     }
 
-    public boolean isKeyDown(int keyCode)
-    {
-        return keysPressed.contains(keyCode);
-    }
-
-    public boolean isKeyJustPressed(int keyCode)
-    {
-        return keysJustPressed.contains(keyCode);
-    }
-
-    public boolean isKeyJustReleased(int keyCode)
-    {
-        return keysJustReleased.contains(keyCode);
-    }
-
-    public boolean isMouseDown(int button)
-    {
-        return mousePressed.contains(button);
-    }
-
-    public boolean isMouseJustPressed(int button)
-    {
-        return mouseJustPressed.contains(button);
-    }
-
-    public boolean isMouseJustReleased(int button)
-    {
-        return mouseJustReleased.contains(button);
-    }
+    public boolean isKeyDown(int code)           { return keysDown.contains(code); }
+    public boolean isKeyJustPressed(int code)    { return keysJustPressed.contains(code); }
+    public boolean isKeyJustReleased(int code)   { return keysJustReleased.contains(code); }
+    public boolean isMouseDown(int button)       { return mouseDown.contains(button); }
+    public boolean isMouseJustPressed(int button){ return mouseJustPressed.contains(button); }
+    public boolean isMouseJustReleased(int button){ return mouseJustReleased.contains(button); }
 
     public void clear()
     {
-        keysPressed.clear();
+        keysDown.clear();
         keysJustPressed.clear();
         keysJustReleased.clear();
-        mousePressed.clear();
+        mouseDown.clear();
         mouseJustPressed.clear();
         mouseJustReleased.clear();
         mouseScroll = 0;
@@ -484,7 +573,7 @@ class Platform
 
     public Platform()
     {
-        String name = System.getProperty("os.name", "").toLowerCase();
+        String name   = System.getProperty("os.name", "").toLowerCase();
         String vendor = System.getProperty("java.vendor", "").toLowerCase();
 
         if (name.contains("android") || vendor.contains("android"))
@@ -509,24 +598,19 @@ class Platform
     public int getScreenWidth()
     {
         return GraphicsEnvironment.getLocalGraphicsEnvironment()
-            .getDefaultScreenDevice()
-            .getDisplayMode()
-            .getWidth();
+            .getDefaultScreenDevice().getDisplayMode().getWidth();
     }
 
     public int getScreenHeight()
     {
         return GraphicsEnvironment.getLocalGraphicsEnvironment()
-            .getDefaultScreenDevice()
-            .getDisplayMode()
-            .getHeight();
+            .getDefaultScreenDevice().getDisplayMode().getHeight();
     }
 
     public int getRefreshRate()
     {
         DisplayMode mode = GraphicsEnvironment.getLocalGraphicsEnvironment()
-            .getDefaultScreenDevice()
-            .getDisplayMode();
+            .getDefaultScreenDevice().getDisplayMode();
 
         return mode.getRefreshRate() == DisplayMode.REFRESH_RATE_UNKNOWN ? 60 : mode.getRefreshRate();
     }
