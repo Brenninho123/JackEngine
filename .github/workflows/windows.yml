@@ -43,10 +43,18 @@ jobs:
         run: |
           jar cfm JackEngine.jar manifest.txt -C build .
 
+      - name: Build EXE
+        run: |
+          jpackage ^
+          --type exe ^
+          --name "JackEngine" ^
+          --input . ^
+          --main-jar JackEngine.jar ^
+          --main-class Main ^
+          --dest dist
+
       - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
           name: JackEngine-Windows
-          path: |
-            JackEngine.jar
-            build/
+          path: dist/
