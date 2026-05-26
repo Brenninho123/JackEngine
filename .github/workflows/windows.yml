@@ -35,9 +35,9 @@ jobs:
           xcopy arts build\arts /E /I /Y
 
       - name: Create Manifest
+        shell: pwsh
         run: |
-          echo Main-Class: Main > manifest.txt
-          echo.>> manifest.txt
+          "Main-Class: Main`n" | Out-File -Encoding ASCII manifest.txt
 
       - name: Generate Jar
         run: |
