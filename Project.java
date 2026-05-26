@@ -1,6 +1,8 @@
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
+import source.mobile.android.AndroidManifest;
+
 public class Project
 {
     public String name = "Jack Engine";
@@ -31,9 +33,31 @@ public class Project
 
     public String mainClass = "Main";
 
+    public AndroidManifest androidManifest;
+
     public Project()
     {
         loadConfig();
+
+        initializeMobile();
+    }
+
+    public void initializeMobile()
+    {
+        if(mobileSupport)
+        {
+            androidManifest = new AndroidManifest();
+
+            androidManifest.packageName = mobilePackage;
+
+            androidManifest.appName = name;
+
+            androidManifest.versionName = version;
+
+            androidManifest.landscapeMode = landscapeMode;
+
+            androidManifest.icon = iconPath;
+        }
     }
 
     public void loadConfig()
@@ -53,6 +77,7 @@ public class Project
             windowTitle = getString(json, "title");
 
             width = getInt(json, "width");
+
             height = getInt(json, "height");
 
             fullscreen = getBoolean(json, "fullscreen");
