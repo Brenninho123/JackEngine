@@ -28,13 +28,9 @@ jobs:
       - name: Compile Engine
         shell: pwsh
         run: |
-          $sources = Get-ChildItem -Recurse -Filter "*.java" | Where-Object {
-            $_.FullName -notlike "*\android\*" -and $_.Name -ne "Main.java"
-          } | Select-Object -ExpandProperty FullName
-
-          $sources += (Get-Item "Main.java").FullName
-
-          $sources | Out-File -Encoding UTF8 sources.txt
+          Get-ChildItem -Recurse -Filter "*.java" | Where-Object {
+            $_.FullName -notlike "*\android\*"
+          } | Select-Object -ExpandProperty FullName | Out-File -Encoding UTF8 sources.txt
 
           javac -d build "@sources.txt"
 
