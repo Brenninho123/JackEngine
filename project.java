@@ -6,6 +6,8 @@ public class Project
     public String name = "Jack Engine";
     public String version = "0.1.0";
 
+    public String windowTitle = "Jack Engine";
+
     public int width = 1280;
     public int height = 720;
 
@@ -39,6 +41,8 @@ public class Project
 
             name = getString(json, "name");
             version = getString(json, "version");
+
+            windowTitle = getString(json, "title");
 
             width = getInt(json, "width");
             height = getInt(json, "height");
