@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - master
-
   workflow_dispatch:
 
 jobs:
@@ -13,64 +12,51 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 21
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v3
 
-      - name: Accept Android Licenses
-        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.6'
 
-      - name: Install Android Packages
+      - name: Accept Licenses and Install Packages
         run: |
-          sdkmanager "platform-tools"
-          sdkmanager "platforms;android-34"
-          sdkmanager "build-tools;34.0.0"
+          yes | sdkmanager --licenses
+          sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
-      - name: Create Android Structure
+      - name: Prepare Directories
         run: |
           mkdir -p android/app/src/main/java
           mkdir -p android/app/src/main/res
           mkdir -p android/app/libs
           mkdir -p build
 
-      - name: Find Java Sources
+      - name: Compile Engine Sources
         run: |
-          find . -name "*.java" > sources.txt
-
-      - name: Compile Java Sources
-        run: |
+          find . -name "*.java" -not -path "./android/*" > sources.txt
           javac -d build @sources.txt
+
+      - name: Package Engine Jar
+        run: |
+          printf "Main-Class: Main\n\n" > manifest.txt
+          jar cfm JackEngine.jar manifest.txt -C build .
+          cp JackEngine.jar android/app/libs/
 
       - name: Copy Assets
         run: |
-          cp -r assets build/assets || true
-          cp -r arts build/arts || true
-
-      - name: Generate Manifest File
-        run: |
-          printf "Main-Class: Main\n\n" > manifest.txt
-
-      - name: Generate Jar
-        run: |
-          jar cfm JackEngine.jar manifest.txt -C build .
-
-      - name: Move Runtime Jar
-        run: |
-          cp JackEngine.jar android/app/libs/
+          cp -r assets build/assets 2>/dev/null || true
+          cp -r arts build/arts 2>/dev/null || true
 
       - name: Generate AndroidManifest.xml
         run: |
-          cat > android/app/src/main/AndroidManifest.xml <<EOF
+          cat > android/app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.jackengine.game">
 
@@ -102,7 +88,7 @@ jobs:
 
       - name: Generate MainActivity
         run: |
-          cat > android/app/src/main/java/MainActivity.java <<EOF
+          cat > android/app/src/main/java/MainActivity.java <<'EOF'
           import android.app.Activity;
           import android.os.Bundle;
 
@@ -118,13 +104,12 @@ jobs:
 
       - name: Generate Root Build Gradle
         run: |
-          cat > android/build.gradle <<EOF
+          cat > android/build.gradle <<'EOF'
           buildscript {
               repositories {
                   google()
                   mavenCentral()
               }
-
               dependencies {
                   classpath 'com.android.tools.build:gradle:8.4.0'
               }
@@ -140,21 +125,19 @@ jobs:
 
       - name: Generate App Build Gradle
         run: |
-          cat > android/app/build.gradle <<EOF
+          cat > android/app/build.gradle <<'EOF'
           plugins {
               id 'com.android.application'
           }
 
           android {
               namespace 'com.jackengine.game'
-
               compileSdk 34
 
               defaultConfig {
                   applicationId "com.jackengine.game"
                   minSdk 24
                   targetSdk 34
-
                   versionCode 1
                   versionName "0.1.0"
               }
@@ -166,11 +149,6 @@ jobs:
               }
           }
 
-          repositories {
-              google()
-              mavenCentral()
-          }
-
           dependencies {
               implementation fileTree(dir: 'libs', include: ['*.jar'])
           }
@@ -178,7 +156,15 @@ jobs:
 
       - name: Generate Settings Gradle
         run: |
-          cat > android/settings.gradle <<EOF
+          cat > android/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
           rootProject.name = 'JackEngine'
           include ':app'
           EOF
@@ -186,7 +172,8 @@ jobs:
       - name: Generate Gradle Wrapper
         run: |
           cd android
-          gradle wrapper
+          gradle wrapper --gradle-version 8.6
+          chmod +x gradlew
 
       - name: Build APK
         run: |
