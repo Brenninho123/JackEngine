@@ -6,7 +6,8 @@
     "title": "Jack Engine",
     "width": 1280,
     "height": 720,
-    "fullscreen": false
+    "fullscreen": false,
+    "icon": "arts/icon.png"
   },
 
   "runtime": {
