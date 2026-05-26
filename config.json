@@ -1,0 +1,23 @@
+{
+  "name": "Jack Engine",
+  "version": "0.1.0",
+
+  "window": {
+    "title": "Jack Engine",
+    "width": 1280,
+    "height": 720,
+    "fullscreen": false
+  },
+
+  "runtime": {
+    "framerate": 60,
+    "mobileSupport": true
+  },
+
+  "paths": {
+    "assets": "assets/",
+    "source": "source/"
+  },
+
+  "mainClass": "Main"
+}
