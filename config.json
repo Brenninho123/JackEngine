@@ -2,8 +2,9 @@
   "name": "Jack Engine",
   "version": "0.1.0",
 
+  "title": "Jack Engine",
+
   "window": {
-    "title": "Jack Engine",
     "width": 1280,
     "height": 720,
     "fullscreen": false,
