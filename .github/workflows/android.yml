@@ -33,25 +33,416 @@ jobs:
       - name: Prepare Directories
         run: |
           mkdir -p android/app/src/main/java
-          mkdir -p android/app/src/main/res
-          mkdir -p android/app/libs
-          mkdir -p build
+          mkdir -p android/app/src/main/res/drawable
+          mkdir -p android/app/src/main/assets
 
-      - name: Compile Engine Sources
+      - name: Copy Shared Sources
         run: |
-          find . -name "*.java" -not -path "./android/*" > sources.txt
-          javac -d build @sources.txt
-
-      - name: Package Engine Jar
-        run: |
-          printf "Main-Class: Main\n\n" > manifest.txt
-          jar cfm JackEngine.jar manifest.txt -C build .
-          cp JackEngine.jar android/app/libs/
+          cp Project.java android/app/src/main/java/Project.java
+          find source -name "*.java" -not -name "Main.java" | while read f; do
+            dest="android/app/src/main/java/$(basename $f)"
+            cp "$f" "$dest"
+          done
 
       - name: Copy Assets
         run: |
-          cp -r assets build/assets 2>/dev/null || true
-          cp -r arts build/arts 2>/dev/null || true
+          cp -r assets/. android/app/src/main/assets/ 2>/dev/null || true
+          cp -r arts/. android/app/src/main/res/drawable/ 2>/dev/null || true
+
+      - name: Generate Scene
+        run: |
+          cat > android/app/src/main/java/Scene.java <<'EOF'
+          import android.graphics.Canvas;
+          import android.view.KeyEvent;
+          import android.view.MotionEvent;
+
+          public class Scene
+          {
+              public void update() {}
+
+              public void render(Canvas canvas) {}
+
+              public void keyPressed(int keyCode, KeyEvent event) {}
+
+              public void keyReleased(int keyCode, KeyEvent event) {}
+
+              public void touchDown(float x, float y, int pointer) {}
+
+              public void touchUp(float x, float y, int pointer) {}
+
+              public void touchDragged(float x, float y, int pointer) {}
+
+              public void onWindowClose() {}
+
+              public void destroy() {}
+          }
+          EOF
+
+      - name: Generate Input
+        run: |
+          cat > android/app/src/main/java/Input.java <<'EOF'
+          import java.util.HashSet;
+          import java.util.Set;
+
+          public class Input
+          {
+              public float touchX;
+              public float touchY;
+
+              private final Set<Integer> keysDown = new HashSet<>();
+              private final Set<Integer> keysJustPressed = new HashSet<>();
+              private final Set<Integer> keysJustReleased = new HashSet<>();
+
+              private final Set<Integer> pointersDown = new HashSet<>();
+
+              public void update()
+              {
+                  keysJustPressed.clear();
+                  keysJustReleased.clear();
+              }
+
+              public void onKeyPressed(int keyCode)
+              {
+                  if (!keysDown.contains(keyCode))
+                      keysJustPressed.add(keyCode);
+
+                  keysDown.add(keyCode);
+              }
+
+              public void onKeyReleased(int keyCode)
+              {
+                  keysDown.remove(keyCode);
+                  keysJustReleased.add(keyCode);
+              }
+
+              public void onTouchDown(float x, float y, int pointer)
+              {
+                  touchX = x;
+                  touchY = y;
+                  pointersDown.add(pointer);
+              }
+
+              public void onTouchUp(float x, float y, int pointer)
+              {
+                  touchX = x;
+                  touchY = y;
+                  pointersDown.remove(pointer);
+              }
+
+              public void onTouchDragged(float x, float y, int pointer)
+              {
+                  touchX = x;
+                  touchY = y;
+              }
+
+              public boolean isKeyDown(int keyCode) { return keysDown.contains(keyCode); }
+              public boolean isKeyJustPressed(int keyCode) { return keysJustPressed.contains(keyCode); }
+              public boolean isKeyJustReleased(int keyCode) { return keysJustReleased.contains(keyCode); }
+              public boolean isTouching() { return !pointersDown.isEmpty(); }
+              public boolean isTouching(int pointer) { return pointersDown.contains(pointer); }
+
+              public void clear()
+              {
+                  keysDown.clear();
+                  keysJustPressed.clear();
+                  keysJustReleased.clear();
+                  pointersDown.clear();
+              }
+          }
+          EOF
+
+      - name: Generate Main
+        run: |
+          cat > android/app/src/main/java/Main.java <<'EOF'
+          import android.content.Context;
+          import android.graphics.Canvas;
+          import android.graphics.Color;
+          import android.view.KeyEvent;
+          import android.view.MotionEvent;
+          import android.view.SurfaceHolder;
+          import android.view.SurfaceView;
+
+          public class Main extends SurfaceView implements SurfaceHolder.Callback, Runnable
+          {
+              public static Main instance;
+              public static Project project;
+
+              public static int width;
+              public static int height;
+              public static int framerate;
+
+              public static boolean running;
+              public static boolean mobile = true;
+              public static boolean focused = true;
+
+              public static long currentFrame;
+              public static long engineStartTime;
+
+              public static Scene currentScene;
+
+              public static final Input input = new Input();
+
+              private Thread gameThread;
+              private SurfaceHolder surfaceHolder;
+
+              static
+              {
+                  project = new Project();
+              }
+
+              public Main(Context context)
+              {
+                  super(context);
+
+                  instance = this;
+
+                  width = project.width;
+                  height = project.height;
+                  framerate = project.framerate;
+                  running = true;
+                  engineStartTime = System.currentTimeMillis();
+
+                  surfaceHolder = getHolder();
+                  surfaceHolder.addCallback(this);
+
+                  setFocusable(true);
+                  setFocusableInTouchMode(true);
+
+                  initialize();
+              }
+
+              private void initialize()
+              {
+                  currentScene = new Scene();
+              }
+
+              @Override
+              public void surfaceCreated(SurfaceHolder holder)
+              {
+                  running = true;
+
+                  gameThread = new Thread(this);
+                  gameThread.setDaemon(true);
+                  gameThread.start();
+              }
+
+              @Override
+              public void surfaceChanged(SurfaceHolder holder, int format, int w, int h)
+              {
+                  width = w;
+                  height = h;
+              }
+
+              @Override
+              public void surfaceDestroyed(SurfaceHolder holder)
+              {
+                  running = false;
+
+                  try
+                  {
+                      gameThread.join();
+                  }
+                  catch (InterruptedException e)
+                  {
+                      Thread.currentThread().interrupt();
+                  }
+              }
+
+              @Override
+              public void run()
+              {
+                  long targetFrameNanos = 1_000_000_000L / framerate;
+                  long lastTime = System.nanoTime();
+                  double delta = 0;
+
+                  while (running)
+                  {
+                      long now = System.nanoTime();
+                      delta += (now - lastTime) / (double) targetFrameNanos;
+                      lastTime = now;
+
+                      if (delta >= 1)
+                      {
+                          delta--;
+
+                          input.update();
+                          update();
+                          render();
+
+                          currentFrame++;
+                      }
+
+                      try
+                      {
+                          Thread.sleep(1);
+                      }
+                      catch (InterruptedException e)
+                      {
+                          Thread.currentThread().interrupt();
+                      }
+                  }
+              }
+
+              private void update()
+              {
+                  if (currentScene != null)
+                      currentScene.update();
+              }
+
+              private void render()
+              {
+                  Canvas canvas = surfaceHolder.lockCanvas();
+
+                  if (canvas == null)
+                      return;
+
+                  try
+                  {
+                      canvas.drawColor(Color.BLACK);
+
+                      if (currentScene != null)
+                          currentScene.render(canvas);
+                  }
+                  finally
+                  {
+                      surfaceHolder.unlockCanvasAndPost(canvas);
+                  }
+              }
+
+              @Override
+              public boolean onKeyDown(int keyCode, KeyEvent event)
+              {
+                  input.onKeyPressed(keyCode);
+
+                  if (currentScene != null)
+                      currentScene.keyPressed(keyCode, event);
+
+                  return true;
+              }
+
+              @Override
+              public boolean onKeyUp(int keyCode, KeyEvent event)
+              {
+                  input.onKeyReleased(keyCode);
+
+                  if (currentScene != null)
+                      currentScene.keyReleased(keyCode, event);
+
+                  return true;
+              }
+
+              @Override
+              public boolean onTouchEvent(MotionEvent event)
+              {
+                  int action = event.getActionMasked();
+                  int pointer = event.getActionIndex();
+                  float x = event.getX(pointer);
+                  float y = event.getY(pointer);
+
+                  if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN)
+                  {
+                      input.onTouchDown(x, y, pointer);
+
+                      if (currentScene != null)
+                          currentScene.touchDown(x, y, pointer);
+                  }
+                  else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)
+                  {
+                      input.onTouchUp(x, y, pointer);
+
+                      if (currentScene != null)
+                          currentScene.touchUp(x, y, pointer);
+                  }
+                  else if (action == MotionEvent.ACTION_MOVE)
+                  {
+                      input.onTouchDragged(x, y, pointer);
+
+                      if (currentScene != null)
+                          currentScene.touchDragged(x, y, pointer);
+                  }
+
+                  return true;
+              }
+
+              public static void switchScene(Scene scene)
+              {
+                  if (currentScene != null)
+                      currentScene.destroy();
+
+                  currentScene = scene;
+              }
+
+              public static long getEngineUptime()
+              {
+                  return System.currentTimeMillis() - engineStartTime;
+              }
+
+              public static void shutdown()
+              {
+                  running = false;
+              }
+          }
+          EOF
+
+      - name: Generate MainActivity
+        run: |
+          cat > android/app/src/main/java/MainActivity.java <<'EOF'
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.view.Window;
+          import android.view.WindowManager;
+
+          public class MainActivity extends Activity
+          {
+              @Override
+              protected void onCreate(Bundle savedInstanceState)
+              {
+                  super.onCreate(savedInstanceState);
+
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+
+                  getWindow().setFlags(
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                      WindowManager.LayoutParams.FLAG_FULLSCREEN
+                  );
+
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+                  setContentView(new Main(this));
+              }
+
+              @Override
+              protected void onPause()
+              {
+                  super.onPause();
+                  Main.running = false;
+                  Main.focused = false;
+                  Main.input.clear();
+              }
+
+              @Override
+              protected void onResume()
+              {
+                  super.onResume();
+                  Main.running = true;
+                  Main.focused = true;
+
+                  if (Main.instance != null)
+                      Main.instance.getHolder().addCallback(Main.instance);
+              }
+
+              @Override
+              protected void onDestroy()
+              {
+                  super.onDestroy();
+
+                  if (Main.currentScene != null)
+                      Main.currentScene.onWindowClose();
+
+                  Main.shutdown();
+              }
+          }
+          EOF
 
       - name: Generate AndroidManifest.xml
         run: |
@@ -72,6 +463,7 @@ jobs:
                   <activity
                       android:name=".MainActivity"
                       android:exported="true"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
                       android:screenOrientation="landscape">
 
                       <intent-filter>
@@ -84,22 +476,6 @@ jobs:
               </application>
 
           </manifest>
-          EOF
-
-      - name: Generate MainActivity
-        run: |
-          cat > android/app/src/main/java/MainActivity.java <<'EOF'
-          import android.app.Activity;
-          import android.os.Bundle;
-
-          public class MainActivity extends Activity
-          {
-              @Override
-              protected void onCreate(Bundle savedInstanceState)
-              {
-                  super.onCreate(savedInstanceState);
-              }
-          }
           EOF
 
       - name: Generate Root Build Gradle
@@ -150,10 +526,11 @@ jobs:
                       minifyEnabled false
                   }
               }
-          }
 
-          dependencies {
-              implementation fileTree(dir: 'libs', include: ['*.jar'])
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_11
+                  targetCompatibility JavaVersion.VERSION_11
+              }
           }
           EOF
 
