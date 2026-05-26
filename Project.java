@@ -1,9 +1,7 @@
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
-#if android
 import source.mobile.android.AndroidManifest;
-#end
 
 public class Project
 {
