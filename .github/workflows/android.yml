@@ -22,11 +22,11 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Accept Android SDK Licenses
-        run: yes | sdkmanager --licenses
-
-      - name: Install Android SDK
+      - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+
+      - name: Accept Android Licenses
+        run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 
       - name: Create Build Folder
         run: mkdir -p build
@@ -40,7 +40,7 @@ jobs:
           cp -r assets build/assets
           cp -r arts build/arts
 
-      - name: Generate Manifest
+      - name: Create Manifest
         run: |
           printf "Main-Class: Main\n\n" > manifest.txt
 
@@ -48,19 +48,13 @@ jobs:
         run: |
           jar cfm JackEngine.jar manifest.txt -C build .
 
-      - name: Create Android Folder
+      - name: Create Android Output
         run: |
-          mkdir -p android/app/libs
-          cp JackEngine.jar android/app/libs/
-
-      - name: Generate APK
-        run: |
-          echo "Android build initialized"
+          mkdir -p android-build
+          cp JackEngine.jar android-build/
 
       - name: Upload Android Build
         uses: actions/upload-artifact@v4
         with:
           name: JackEngine-Android
-          path: |
-            JackEngine.jar
-            android/
+          path: android-build/
