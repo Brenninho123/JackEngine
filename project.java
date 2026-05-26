@@ -1,7 +1,7 @@
 import java.nio.file.Files;
 import java.nio.file.Paths;
 
-public class Project
+public class project
 {
     public String name = "Jack Engine";
     public String version = "0.1.0";
