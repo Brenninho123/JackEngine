@@ -74,8 +74,7 @@ jobs:
               package="com.jackengine.game">
 
               <application
-                  android:label="Jack Engine"
-                  android:icon="@mipmap/ic_launcher">
+                  android:label="Jack Engine">
 
                   <activity
                       android:name=".MainActivity"
@@ -93,7 +92,7 @@ jobs:
           </manifest>
           EOF
 
-      - name: Create Gradle Build
+      - name: Create Root Build Gradle
         run: |
           cat > android/build.gradle <<EOF
           buildscript {
