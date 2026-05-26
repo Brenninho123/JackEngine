@@ -1,3 +1,5 @@
+package;
+
 import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.SwingUtilities;
@@ -32,8 +34,8 @@ public class Main extends JPanel implements KeyListener
     public static long currentFrame;
     public static long engineStartTime;
 
-    public static String engineName = "JackEngine";
-    public static String engineVersion = "1.0.0";
+    public static String engineName = "Jack Engine";
+    public static String engineVersion = "0.1.0";
 
     public static Scene currentScene;
 
