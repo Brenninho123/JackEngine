@@ -1,3 +1,5 @@
+package source.mobile.android;
+
 public class AndroidManifest
 {
     public String packageName = "com.jackengine.game";
