@@ -1,25 +1,28 @@
 {
-  "name": "Jack Engine",
-  "version": "0.1.0",
+    "name": "Jack Engine",
+    "version": "0.1.0",
+    "title": "Jack Engine",
+    "mainClass": "Main",
 
-  "title": "Jack Engine",
+    "window": {
+        "width": 1280,
+        "height": 720,
+        "fullscreen": false,
+        "icon": "arts/icon.png"
+    },
 
-  "window": {
-    "width": 1280,
-    "height": 720,
-    "fullscreen": false,
-    "icon": "arts/icon.png"
-  },
+    "runtime": {
+        "framerate": 60,
+        "mobileSupport": true,
+        "touchControls": true,
+        "autoMobileScaling": true,
+        "mobileShaders": false,
+        "landscapeMode": true,
+        "mobilePackage": "com.jackengine.game"
+    },
 
-  "runtime": {
-    "framerate": 60,
-    "mobileSupport": true
-  },
-
-  "paths": {
-    "assets": "assets/",
-    "source": "source/"
-  },
-
-  "mainClass": "Main"
+    "paths": {
+        "assets": "assets/",
+        "source": "source/"
+    }
 }
