@@ -28,7 +28,7 @@ jobs:
       - name: Accept Android Licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 
-      - name: Install Android Build Tools
+      - name: Install Android Packages
         run: |
           sdkmanager "platform-tools"
           sdkmanager "platforms;android-34"
@@ -39,12 +39,11 @@ jobs:
           mkdir -p android/app/src/main/java
           mkdir -p android/app/src/main/res
           mkdir -p android/app/libs
-
-      - name: Create Build Folder
-        run: mkdir -p build
+          mkdir -p build
 
       - name: Find Java Sources
-        run: find . -name "*.java" > sources.txt
+        run: |
+          find . -name "*.java" > sources.txt
 
       - name: Compile Java Sources
         run: |
@@ -55,7 +54,7 @@ jobs:
           cp -r assets build/assets || true
           cp -r arts build/arts || true
 
-      - name: Create Manifest File
+      - name: Generate Manifest File
         run: |
           printf "Main-Class: Main\n\n" > manifest.txt
 
@@ -63,22 +62,31 @@ jobs:
         run: |
           jar cfm JackEngine.jar manifest.txt -C build .
 
-      - name: Move Jar
+      - name: Move Runtime Jar
         run: |
           cp JackEngine.jar android/app/libs/
 
-      - name: Create AndroidManifest.xml
+      - name: Generate AndroidManifest.xml
         run: |
           cat > android/app/src/main/AndroidManifest.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.jackengine.game">
 
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
               <application
-                  android:label="Jack Engine">
+                  android:label="Jack Engine"
+                  android:hardwareAccelerated="true"
+                  android:resizeableActivity="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">
 
                   <activity
                       android:name=".MainActivity"
-                      android:exported="true">
+                      android:exported="true"
+                      android:screenOrientation="landscape">
 
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
@@ -92,7 +100,23 @@ jobs:
           </manifest>
           EOF
 
-      - name: Create Root Build Gradle
+      - name: Generate MainActivity
+        run: |
+          cat > android/app/src/main/java/MainActivity.java <<EOF
+          import android.app.Activity;
+          import android.os.Bundle;
+
+          public class MainActivity extends Activity
+          {
+              @Override
+              protected void onCreate(Bundle savedInstanceState)
+              {
+                  super.onCreate(savedInstanceState);
+              }
+          }
+          EOF
+
+      - name: Generate Root Build Gradle
         run: |
           cat > android/build.gradle <<EOF
           buildscript {
@@ -114,7 +138,7 @@ jobs:
           }
           EOF
 
-      - name: Create App Build Gradle
+      - name: Generate App Build Gradle
         run: |
           cat > android/app/build.gradle <<EOF
           plugins {
@@ -123,12 +147,14 @@ jobs:
 
           android {
               namespace 'com.jackengine.game'
+
               compileSdk 34
 
               defaultConfig {
                   applicationId "com.jackengine.game"
                   minSdk 24
                   targetSdk 34
+
                   versionCode 1
                   versionName "0.1.0"
               }
@@ -150,14 +176,14 @@ jobs:
           }
           EOF
 
-      - name: Create Settings Gradle
+      - name: Generate Settings Gradle
         run: |
           cat > android/settings.gradle <<EOF
           rootProject.name = 'JackEngine'
           include ':app'
           EOF
 
-      - name: Create Gradle Wrapper
+      - name: Generate Gradle Wrapper
         run: |
           cd android
           gradle wrapper
