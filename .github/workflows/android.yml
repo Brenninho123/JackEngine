@@ -31,14 +31,16 @@ jobs:
       - name: Create Build Folder
         run: mkdir -p build
 
-      - name: Compile Java Sources
-        run: |
-          javac -d build source/*.java Project.java
+      - name: Find Java Sources
+        run: find . -name "*.java" > sources.txt
+
+      - name: Compile Engine
+        run: javac -d build @sources.txt
 
       - name: Copy Assets
         run: |
-          cp -r assets build/assets
-          cp -r arts build/arts
+          cp -r assets build/assets || true
+          cp -r arts build/arts || true
 
       - name: Create Manifest
         run: |
