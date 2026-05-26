@@ -2,8 +2,8 @@ import java.util.HashMap;
 
 public class Project
 {
-    public String name = "JackEngine Project";
-    public String version = "1.0.0";
+    public String name = "Jack Engine";
+    public String version = "0.1.0";
     public String packageName = "com.jackengine.game";
 
     public int width = 1280;
@@ -19,7 +19,7 @@ public class Project
     public String assetsPath = "assets/";
     public String sourcePath = "source/";
 
-    public String windowTitle = "JackEngine";
+    public String windowTitle = "Jack Engine";
 
     public HashMap<String, String> metadata = new HashMap<>();
 
