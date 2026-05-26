@@ -1,109 +1,150 @@
-import java.util.HashMap;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 
 public class Project
 {
     public String name = "Jack Engine";
     public String version = "0.1.0";
-    public String packageName = "com.jackengine.game";
 
     public int width = 1280;
     public int height = 720;
-    public int framerate = 60;
 
     public boolean fullscreen = false;
-    public boolean vsync = true;
-    public boolean antialiasing = true;
 
-    public String mainClass = "Main";
+    public int framerate = 60;
+
+    public boolean mobileSupport = true;
 
     public String assetsPath = "assets/";
     public String sourcePath = "source/";
 
-    public String windowTitle = "Jack Engine";
-
-    public HashMap<String, String> metadata = new HashMap<>();
+    public String mainClass = "Main";
 
     public Project()
     {
-
+        loadConfig();
     }
 
-    public Project setName(String value)
+    public void loadConfig()
     {
-        name = value;
-        return this;
+        try
+        {
+            String json = new String(
+                Files.readAllBytes(
+                    Paths.get("config.json")
+                )
+            );
+
+            name = getString(json, "name");
+            version = getString(json, "version");
+
+            width = getInt(json, "width");
+            height = getInt(json, "height");
+
+            fullscreen = getBoolean(json, "fullscreen");
+
+            framerate = getInt(json, "framerate");
+
+            mobileSupport = getBoolean(json, "mobileSupport");
+
+            assetsPath = getString(json, "assets");
+            sourcePath = getString(json, "source");
+
+            mainClass = getString(json, "mainClass");
+        }
+        catch(Exception e)
+        {
+
+        }
     }
 
-    public Project setVersion(String value)
+    public String getString(String json, String key)
     {
-        version = value;
-        return this;
+        try
+        {
+            String search = "\"" + key + "\":";
+
+            int start = json.indexOf(search);
+
+            if(start == -1)
+            {
+                return "";
+            }
+
+            start = json.indexOf("\"", start + search.length()) + 1;
+
+            int end = json.indexOf("\"", start);
+
+            return json.substring(start, end);
+        }
+        catch(Exception e)
+        {
+            return "";
+        }
     }
 
-    public Project setPackage(String value)
+    public int getInt(String json, String key)
     {
-        packageName = value;
-        return this;
+        try
+        {
+            String search = "\"" + key + "\":";
+
+            int start = json.indexOf(search);
+
+            if(start == -1)
+            {
+                return 0;
+            }
+
+            start += search.length();
+
+            while(json.charAt(start) == ' ' || json.charAt(start) == '\n')
+            {
+                start++;
+            }
+
+            int end = start;
+
+            while(Character.isDigit(json.charAt(end)))
+            {
+                end++;
+            }
+
+            return Integer.parseInt(
+                json.substring(start, end)
+            );
+        }
+        catch(Exception e)
+        {
+            return 0;
+        }
     }
 
-    public Project setWindow(String title, int w, int h)
+    public boolean getBoolean(String json, String key)
     {
-        windowTitle = title;
-        width = w;
-        height = h;
-        return this;
-    }
+        try
+        {
+            String search = "\"" + key + "\":";
 
-    public Project setFramerate(int value)
-    {
-        framerate = value;
-        return this;
-    }
+            int start = json.indexOf(search);
 
-    public Project setFullscreen(boolean value)
-    {
-        fullscreen = value;
-        return this;
-    }
+            if(start == -1)
+            {
+                return false;
+            }
 
-    public Project setVsync(boolean value)
-    {
-        vsync = value;
-        return this;
-    }
+            start += search.length();
 
-    public Project setAntialiasing(boolean value)
-    {
-        antialiasing = value;
-        return this;
-    }
+            while(json.charAt(start) == ' ' || json.charAt(start) == '\n')
+            {
+                start++;
+            }
 
-    public Project setMainClass(String value)
-    {
-        mainClass = value;
-        return this;
-    }
-
-    public Project setAssetsPath(String value)
-    {
-        assetsPath = value;
-        return this;
-    }
-
-    public Project setSourcePath(String value)
-    {
-        sourcePath = value;
-        return this;
-    }
-
-    public Project setMetadata(String key, String value)
-    {
-        metadata.put(key, value);
-        return this;
-    }
-
-    public String getMetadata(String key)
-    {
-        return metadata.get(key);
+            return json.startsWith("true", start);
+        }
+        catch(Exception e)
+        {
+            return false;
+        }
     }
 }
