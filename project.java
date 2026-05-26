@@ -18,6 +18,8 @@ public class Project
     public String assetsPath = "assets/";
     public String sourcePath = "source/";
 
+    public String iconPath = "arts/icon.png";
+
     public String mainClass = "Main";
 
     public Project()
@@ -49,6 +51,8 @@ public class Project
 
             assetsPath = getString(json, "assets");
             sourcePath = getString(json, "source");
+
+            iconPath = getString(json, "icon");
 
             mainClass = getString(json, "mainClass");
         }
