@@ -17,6 +17,13 @@ public class Project
 
     public boolean mobileSupport = true;
 
+    public boolean touchControls = true;
+    public boolean autoMobileScaling = true;
+    public boolean mobileShaders = false;
+    public boolean landscapeMode = true;
+
+    public String mobilePackage = "com.jackengine.game";
+
     public String assetsPath = "assets/";
     public String sourcePath = "source/";
 
@@ -40,6 +47,7 @@ public class Project
             );
 
             name = getString(json, "name");
+
             version = getString(json, "version");
 
             windowTitle = getString(json, "title");
@@ -53,7 +61,18 @@ public class Project
 
             mobileSupport = getBoolean(json, "mobileSupport");
 
+            touchControls = getBoolean(json, "touchControls");
+
+            autoMobileScaling = getBoolean(json, "autoMobileScaling");
+
+            mobileShaders = getBoolean(json, "mobileShaders");
+
+            landscapeMode = getBoolean(json, "landscapeMode");
+
+            mobilePackage = getString(json, "mobilePackage");
+
             assetsPath = getString(json, "assets");
+
             sourcePath = getString(json, "source");
 
             iconPath = getString(json, "icon");
