@@ -1,0 +1,48 @@
+name: Build Windows
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Create Build Folder
+        run: mkdir build
+
+      - name: Compile Engine
+        run: |
+          javac -d build source/*.java Project.java
+
+      - name: Copy Assets
+        run: |
+          xcopy assets build\assets /E /I /Y
+          xcopy arts build\arts /E /I /Y
+
+      - name: Generate Executable
+        run: |
+          echo Main-Class: Main > manifest.txt
+          jar cfm JackEngine.jar manifest.txt -C build .
+
+      - name: Upload Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: JackEngine-Windows
+          path: |
+            JackEngine.jar
+            build/
