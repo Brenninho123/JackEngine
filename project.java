@@ -31,7 +31,7 @@ public class project
 
     public String mainClass = "Main";
 
-    public Project()
+    public project()
     {
         loadConfig();
     }
