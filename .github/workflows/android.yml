@@ -28,21 +28,34 @@ jobs:
       - name: Accept Android Licenses
         run: yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses
 
+      - name: Install Android Build Tools
+        run: |
+          sdkmanager "platform-tools"
+          sdkmanager "platforms;android-34"
+          sdkmanager "build-tools;34.0.0"
+
+      - name: Create Android Structure
+        run: |
+          mkdir -p android/app/src/main/java
+          mkdir -p android/app/src/main/res
+          mkdir -p android/app/libs
+
       - name: Create Build Folder
         run: mkdir -p build
 
       - name: Find Java Sources
         run: find . -name "*.java" > sources.txt
 
-      - name: Compile Engine
-        run: javac -d build @sources.txt
+      - name: Compile Java Sources
+        run: |
+          javac -d build @sources.txt
 
       - name: Copy Assets
         run: |
           cp -r assets build/assets || true
           cp -r arts build/arts || true
 
-      - name: Create Manifest
+      - name: Create Manifest File
         run: |
           printf "Main-Class: Main\n\n" > manifest.txt
 
@@ -50,13 +63,113 @@ jobs:
         run: |
           jar cfm JackEngine.jar manifest.txt -C build .
 
-      - name: Create Android Output
+      - name: Move Jar
         run: |
-          mkdir -p android-build
-          cp JackEngine.jar android-build/
+          cp JackEngine.jar android/app/libs/
 
-      - name: Upload Android Build
+      - name: Create AndroidManifest.xml
+        run: |
+          cat > android/app/src/main/AndroidManifest.xml <<EOF
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.jackengine.game">
+
+              <application
+                  android:label="Jack Engine"
+                  android:icon="@mipmap/ic_launcher">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+
+                  </activity>
+
+              </application>
+
+          </manifest>
+          EOF
+
+      - name: Create Gradle Build
+        run: |
+          cat > android/build.gradle <<EOF
+          buildscript {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+
+              dependencies {
+                  classpath 'com.android.tools.build:gradle:8.4.0'
+              }
+          }
+
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          EOF
+
+      - name: Create App Build Gradle
+        run: |
+          cat > android/app/build.gradle <<EOF
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.jackengine.game'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "com.jackengine.game"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "0.1.0"
+              }
+
+              buildTypes {
+                  release {
+                      minifyEnabled false
+                  }
+              }
+          }
+
+          repositories {
+              google()
+              mavenCentral()
+          }
+
+          dependencies {
+              implementation fileTree(dir: 'libs', include: ['*.jar'])
+          }
+          EOF
+
+      - name: Create Settings Gradle
+        run: |
+          cat > android/settings.gradle <<EOF
+          rootProject.name = 'JackEngine'
+          include ':app'
+          EOF
+
+      - name: Create Gradle Wrapper
+        run: |
+          cd android
+          gradle wrapper
+
+      - name: Build APK
+        run: |
+          cd android
+          ./gradlew assembleRelease
+
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: JackEngine-Android
-          path: android-build/
+          name: JackEngine-APK
+          path: android/app/build/outputs/apk/release/*.apk
