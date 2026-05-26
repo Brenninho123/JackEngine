@@ -23,16 +23,20 @@ jobs:
           java-version: 21
 
       - name: Create Build Folder
-        run: mkdir build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force build
 
       - name: Compile Engine
+        shell: pwsh
         run: |
           javac -d build source/*.java Project.java
 
       - name: Copy Assets
+        shell: pwsh
         run: |
-          xcopy assets build\assets /E /I /Y
-          xcopy arts build\arts /E /I /Y
+          Copy-Item assets build/assets -Recurse -Force
+          Copy-Item arts build/arts -Recurse -Force
 
       - name: Create Manifest
         shell: pwsh
@@ -40,18 +44,21 @@ jobs:
           "Main-Class: Main`n" | Out-File -Encoding ASCII manifest.txt
 
       - name: Generate Jar
+        shell: pwsh
         run: |
           jar cfm JackEngine.jar manifest.txt -C build .
 
       - name: Build EXE
+        shell: pwsh
         run: |
-          jpackage ^
-          --type exe ^
-          --name "JackEngine" ^
-          --input . ^
-          --main-jar JackEngine.jar ^
-          --main-class Main ^
-          --dest dist
+          jpackage `
+            --type exe `
+            --name "JackEngine" `
+            --input . `
+            --main-jar JackEngine.jar `
+            --main-class Main `
+            --dest dist `
+            --win-console
 
       - name: Upload Build
         uses: actions/upload-artifact@v4
