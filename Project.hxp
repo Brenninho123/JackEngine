@@ -1,0 +1,570 @@
+import haxe.Json;
+import haxe.io.Path;
+import sys.FileSystem;
+import sys.io.File;
+import Sys;
+
+class ProjectConfig
+{
+    public var name:String = "Jack Engine";
+    public var version:String = "0.1.0";
+    public var title:String = "Jack Engine";
+    public var mainClass:String = "Main";
+
+    public var width:Int = 1280;
+    public var height:Int = 720;
+    public var fullscreen:Bool = false;
+    public var icon:String = "arts/icon.png";
+
+    public var framerate:Int = 60;
+    public var mobileSupport:Bool = true;
+    public var touchControls:Bool = true;
+    public var autoMobileScaling:Bool = true;
+    public var mobileShaders:Bool = false;
+    public var landscapeMode:Bool = true;
+    public var mobilePackage:String = "com.jackengine.game";
+
+    public var assetsPath:String = "assets/";
+    public var sourcePath:String = "source/";
+
+    public function new() {}
+}
+
+class SourceEntry
+{
+    public var path:String;
+    public var platform:Platform;
+    public var isGenerated:Bool;
+
+    public function new(path:String, platform:Platform, isGenerated:Bool = false)
+    {
+        this.path       = path;
+        this.platform   = platform;
+        this.isGenerated = isGenerated;
+    }
+}
+
+class AssetEntry
+{
+    public var sourcePath:String;
+    public var destPath:String;
+    public var type:AssetType;
+
+    public function new(sourcePath:String, destPath:String, type:AssetType)
+    {
+        this.sourcePath = sourcePath;
+        this.destPath   = destPath;
+        this.type       = type;
+    }
+}
+
+class JavaCompilerOptions
+{
+    public var sourceCompatibility:String = "11";
+    public var targetCompatibility:String = "11";
+    public var encoding:String            = "UTF-8";
+    public var debugInfo:Bool             = false;
+    public var extraFlags:Array<String>   = [];
+    public var classpath:Array<String>    = [];
+
+    public function new() {}
+
+    public function toArgs():Array<String>
+    {
+        var args:Array<String> = [];
+
+        args.push("-encoding");
+        args.push(encoding);
+        args.push("-source");
+        args.push(sourceCompatibility);
+        args.push("-target");
+        args.push(targetCompatibility);
+
+        if (debugInfo)
+            args.push("-g");
+
+        for (cp in classpath)
+        {
+            args.push("-cp");
+            args.push(cp);
+        }
+
+        for (flag in extraFlags)
+            args.push(flag);
+
+        return args;
+    }
+}
+
+class AndroidConfig
+{
+    public var compileSdk:Int    = 34;
+    public var minSdk:Int        = 24;
+    public var targetSdk:Int     = 34;
+    public var gradleVersion:String = "8.6";
+    public var agpVersion:String    = "8.4.0";
+    public var versionCode:Int      = 1;
+
+    public var permissions:Array<String> = [
+        "android.permission.INTERNET",
+        "android.permission.WAKE_LOCK"
+    ];
+
+    public function new() {}
+}
+
+class WindowsConfig
+{
+    public var type:String    = "exe";
+    public var console:Bool   = false;
+    public var icon:String    = "";
+
+    public function new() {}
+}
+
+enum Platform
+{
+    ALL;
+    DESKTOP;
+    ANDROID;
+    WINDOWS;
+    LINUX;
+    MAC;
+    MOBILE;
+}
+
+enum AssetType
+{
+    IMAGE;
+    AUDIO;
+    FONT;
+    DATA;
+    ANY;
+}
+
+enum BuildMode
+{
+    DEBUG;
+    RELEASE;
+}
+
+class Project
+{
+    public static var instance:Project;
+
+    public var config:ProjectConfig;
+    public var android:AndroidConfig;
+    public var windows:WindowsConfig;
+    public var compiler:JavaCompilerOptions;
+
+    public var sources:Array<SourceEntry>   = [];
+    public var assets:Array<AssetEntry>     = [];
+    public var defines:Map<String, String>  = new Map();
+    public var hooks:Map<String, Array<Void->Void>> = new Map();
+
+    public var buildMode:BuildMode = DEBUG;
+    public var currentPlatform:Platform;
+
+    public function new()
+    {
+        instance        = this;
+        config          = new ProjectConfig();
+        android         = new AndroidConfig();
+        windows         = new WindowsConfig();
+        compiler        = new JavaCompilerOptions();
+        currentPlatform = detectPlatform();
+
+        loadFromJson("config.json");
+        loadFromJava("Project.java");
+        registerDefaultSources();
+        registerDefaultAssets();
+    }
+
+    public function loadFromJson(path:String)
+    {
+        if (!FileSystem.exists(path))
+            return;
+
+        try
+        {
+            var raw:Dynamic = Json.parse(File.getContent(path));
+
+            if (raw.name    != null) config.name    = raw.name;
+            if (raw.version != null) config.version = raw.version;
+            if (raw.title   != null) config.title   = raw.title;
+            if (raw.mainClass != null) config.mainClass = raw.mainClass;
+
+            var window = raw.window;
+            if (window != null)
+            {
+                if (window.width      != null) config.width      = window.width;
+                if (window.height     != null) config.height     = window.height;
+                if (window.fullscreen != null) config.fullscreen = window.fullscreen;
+                if (window.icon       != null) config.icon       = window.icon;
+            }
+
+            var runtime = raw.runtime;
+            if (runtime != null)
+            {
+                if (runtime.framerate        != null) config.framerate        = runtime.framerate;
+                if (runtime.mobileSupport    != null) config.mobileSupport    = runtime.mobileSupport;
+                if (runtime.touchControls    != null) config.touchControls    = runtime.touchControls;
+                if (runtime.autoMobileScaling != null) config.autoMobileScaling = runtime.autoMobileScaling;
+                if (runtime.mobileShaders    != null) config.mobileShaders    = runtime.mobileShaders;
+                if (runtime.landscapeMode    != null) config.landscapeMode    = runtime.landscapeMode;
+                if (runtime.mobilePackage    != null) config.mobilePackage    = runtime.mobilePackage;
+            }
+
+            var paths = raw.paths;
+            if (paths != null)
+            {
+                if (paths.assets != null) config.assetsPath = paths.assets;
+                if (paths.source != null) config.sourcePath = paths.source;
+            }
+        }
+        catch (e:Dynamic) {}
+    }
+
+    public function loadFromJava(path:String)
+    {
+        if (!FileSystem.exists(path))
+            return;
+
+        var content = File.getContent(path);
+
+        var nameMatch    = extractJavaField(content, "name");
+        var versionMatch = extractJavaField(content, "version");
+        var packageMatch = extractJavaField(content, "mobilePackage");
+
+        if (nameMatch    != null && config.name    == "Jack Engine") config.name    = nameMatch;
+        if (versionMatch != null && config.version == "0.1.0")       config.version = versionMatch;
+        if (packageMatch != null) config.mobilePackage = packageMatch;
+
+        syncAndroidFromJava(content);
+    }
+
+    private function extractJavaField(content:String, field:String):Null<String>
+    {
+        var pattern = field + ' = "';
+        var start   = content.indexOf(pattern);
+
+        if (start == -1)
+            return null;
+
+        start += pattern.length;
+
+        var end = content.indexOf('"', start);
+
+        if (end == -1)
+            return null;
+
+        return content.substring(start, end);
+    }
+
+    private function syncAndroidFromJava(content:String)
+    {
+        android.versionCode = 1;
+
+        var parts = config.version.split(".");
+
+        if (parts.length >= 2)
+        {
+            var code = 0;
+            if (parts.length >= 1) code += Std.parseInt(parts[0]) * 10000;
+            if (parts.length >= 2) code += Std.parseInt(parts[1]) * 100;
+            if (parts.length >= 3) code += Std.parseInt(parts[2]);
+            android.versionCode = code;
+        }
+    }
+
+    public function addSource(path:String, ?platform:Platform)
+    {
+        sources.push(new SourceEntry(path, platform == null ? ALL : platform));
+    }
+
+    public function addAsset(sourcePath:String, ?destPath:String, ?type:AssetType)
+    {
+        var dest   = destPath == null ? sourcePath : destPath;
+        var asType = type == null ? ANY : type;
+        assets.push(new AssetEntry(sourcePath, dest, asType));
+    }
+
+    public function define(key:String, ?value:String)
+    {
+        defines.set(key, value == null ? "1" : value);
+    }
+
+    public function setMode(mode:BuildMode)
+    {
+        buildMode = mode;
+
+        if (mode == DEBUG)
+        {
+            compiler.debugInfo = true;
+            define("DEBUG");
+        }
+        else
+        {
+            compiler.debugInfo = false;
+            compiler.extraFlags.push("-O");
+            define("RELEASE");
+        }
+    }
+
+    public function onBefore(target:String, fn:Void->Void)
+    {
+        var key = "before:" + target;
+        if (!hooks.exists(key)) hooks.set(key, []);
+        hooks.get(key).push(fn);
+    }
+
+    public function onAfter(target:String, fn:Void->Void)
+    {
+        var key = "after:" + target;
+        if (!hooks.exists(key)) hooks.set(key, []);
+        hooks.get(key).push(fn);
+    }
+
+    public function runHooks(key:String)
+    {
+        if (!hooks.exists(key))
+            return;
+
+        for (fn in hooks.get(key))
+            fn();
+    }
+
+    public function getSourcesForPlatform(platform:Platform):Array<String>
+    {
+        var result:Array<String> = [];
+
+        for (entry in sources)
+        {
+            if (entry.platform == ALL || entry.platform == platform || entry.platform == DESKTOP && isDesktop(platform))
+                result = result.concat(resolveJavaSources(entry.path, platform));
+        }
+
+        return result;
+    }
+
+    private function resolveJavaSources(path:String, platform:Platform):Array<String>
+    {
+        var result:Array<String> = [];
+
+        if (!FileSystem.exists(path))
+            return result;
+
+        if (FileSystem.isDirectory(path))
+        {
+            for (entry in FileSystem.readDirectory(path))
+            {
+                var full = Path.join([path, entry]);
+
+                if (FileSystem.isDirectory(full))
+                    result = result.concat(resolveJavaSources(full, platform));
+                else if (entry.endsWith(".java"))
+                    result.push(full);
+            }
+        }
+        else if (path.endsWith(".java"))
+        {
+            result.push(path);
+        }
+
+        return result;
+    }
+
+    public function getAssetsForPlatform(platform:Platform):Array<AssetEntry>
+    {
+        return assets;
+    }
+
+    public function generateProjectJson(outputPath:String)
+    {
+        var data = {
+            name:          config.name,
+            version:       config.version,
+            title:         config.title,
+            mainClass:     config.mainClass,
+            window: {
+                width:      config.width,
+                height:     config.height,
+                fullscreen: config.fullscreen,
+                icon:       config.icon
+            },
+            runtime: {
+                framerate:         config.framerate,
+                mobileSupport:     config.mobileSupport,
+                touchControls:     config.touchControls,
+                autoMobileScaling: config.autoMobileScaling,
+                mobileShaders:     config.mobileShaders,
+                landscapeMode:     config.landscapeMode,
+                mobilePackage:     config.mobilePackage
+            },
+            paths: {
+                assets: config.assetsPath,
+                source: config.sourcePath
+            },
+            android: {
+                compileSdk:  android.compileSdk,
+                minSdk:      android.minSdk,
+                targetSdk:   android.targetSdk,
+                versionCode: android.versionCode,
+                permissions: android.permissions
+            },
+            build: {
+                mode:    buildMode == DEBUG ? "debug" : "release",
+                defines: [for (k => v in defines) { key: k, value: v }]
+            }
+        };
+
+        File.saveContent(outputPath, Json.stringify(data, null, "    "));
+    }
+
+    public function generateAndroidManifest(outputPath:String)
+    {
+        var orientation = config.landscapeMode ? "landscape" : "portrait";
+        var permissions = android.permissions.map(p ->
+            '    <uses-permission android:name="' + p + '"/>'
+        ).join("\n");
+
+        var content =
+            '<?xml version="1.0" encoding="utf-8"?>\n' +
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n' +
+            '    package="' + config.mobilePackage + '">\n\n' +
+            permissions + "\n\n" +
+            '    <application\n' +
+            '        android:label="' + config.name + '"\n' +
+            '        android:hardwareAccelerated="true"\n' +
+            '        android:resizeableActivity="true"\n' +
+            '        android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen">\n\n' +
+            '        <activity\n' +
+            '            android:name=".MainActivity"\n' +
+            '            android:exported="true"\n' +
+            '            android:configChanges="orientation|screenSize|keyboardHidden"\n' +
+            '            android:screenOrientation="' + orientation + '">\n\n' +
+            '            <intent-filter>\n' +
+            '                <action android:name="android.intent.action.MAIN"/>\n' +
+            '                <category android:name="android.intent.category.LAUNCHER"/>\n' +
+            '            </intent-filter>\n\n' +
+            '        </activity>\n\n' +
+            '    </application>\n\n' +
+            '</manifest>\n';
+
+        ensureDir(Path.directory(outputPath));
+        File.saveContent(outputPath, content);
+    }
+
+    public function generateAppGradle(outputPath:String)
+    {
+        var content =
+            'plugins {\n' +
+            '    id \'com.android.application\'\n' +
+            '}\n\n' +
+            'android {\n' +
+            '    namespace \'' + config.mobilePackage + '\'\n' +
+            '    compileSdk ' + android.compileSdk + '\n\n' +
+            '    defaultConfig {\n' +
+            '        applicationId "' + config.mobilePackage + '"\n' +
+            '        minSdk ' + android.minSdk + '\n' +
+            '        targetSdk ' + android.targetSdk + '\n' +
+            '        versionCode ' + android.versionCode + '\n' +
+            '        versionName "' + config.version + '"\n' +
+            '    }\n\n' +
+            '    buildTypes {\n' +
+            '        debug {\n' +
+            '            debuggable true\n' +
+            '        }\n' +
+            '        release {\n' +
+            '            minifyEnabled false\n' +
+            '        }\n' +
+            '    }\n\n' +
+            '    compileOptions {\n' +
+            '        sourceCompatibility JavaVersion.VERSION_' + compiler.sourceCompatibility.replace(".", "_") + '\n' +
+            '        targetCompatibility JavaVersion.VERSION_' + compiler.targetCompatibility.replace(".", "_") + '\n' +
+            '    }\n\n' +
+            '    sourceSets {\n' +
+            '        main {\n' +
+            '            java.srcDirs = [\'src/main/java\']\n' +
+            '        }\n' +
+            '    }\n' +
+            '}\n';
+
+        ensureDir(Path.directory(outputPath));
+        File.saveContent(outputPath, content);
+    }
+
+    public function info():String
+    {
+        return '[${config.name}] v${config.version} | ${config.width}x${config.height} @ ${config.framerate}fps | platform: ${currentPlatform}';
+    }
+
+    public function validate():Array<String>
+    {
+        var errors:Array<String> = [];
+
+        if (config.name == null || config.name.length == 0)
+            errors.push("Project name is empty.");
+
+        if (config.width <= 0 || config.height <= 0)
+            errors.push("Invalid window dimensions: ${config.width}x${config.height}");
+
+        if (config.framerate <= 0)
+            errors.push("Invalid framerate: ${config.framerate}");
+
+        if (!FileSystem.exists("Project.java"))
+            errors.push("Project.java not found.");
+
+        if (!FileSystem.exists("Main.java") && !FileSystem.exists("source/Main.java"))
+            errors.push("Main.java not found.");
+
+        if (!FileSystem.exists(config.assetsPath) && config.assetsPath != "")
+            errors.push("Assets path not found: " + config.assetsPath);
+
+        return errors;
+    }
+
+    private function registerDefaultSources()
+    {
+        addSource(".", ALL);
+    }
+
+    private function registerDefaultAssets()
+    {
+        if (FileSystem.exists("assets"))
+            addAsset("assets", "assets", ANY);
+
+        if (FileSystem.exists("arts"))
+            addAsset("arts", "arts", IMAGE);
+
+        if (FileSystem.exists("config.json"))
+            addAsset("config.json", "config.json", DATA);
+    }
+
+    private function detectPlatform():Platform
+    {
+        var os = Sys.systemName().toLowerCase();
+
+        if (os.contains("windows")) return WINDOWS;
+        if (os.contains("mac"))     return MAC;
+        if (os.contains("linux"))   return LINUX;
+
+        return DESKTOP;
+    }
+
+    private function isDesktop(p:Platform):Bool
+    {
+        return p == DESKTOP || p == WINDOWS || p == LINUX || p == MAC;
+    }
+
+    private function ensureDir(path:String)
+    {
+        if (path != null && path.length > 0 && !FileSystem.exists(path))
+            FileSystem.createDirectory(path);
+    }
+
+    public static function load():Project
+    {
+        return new Project();
+    }
+}
