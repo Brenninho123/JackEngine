@@ -1,0 +1,634 @@
+import haxe.Json;
+import haxe.io.Path;
+import sys.FileSystem;
+import sys.io.File;
+import Sys;
+
+class Build
+{
+    static var project:Project;
+    static var target:String = "desktop";
+    static var mode:BuildMode = DEBUG;
+
+    static var BUILD_DIR:String   = "build";
+    static var OUTPUT_DIR:String  = "output";
+    static var ANDROID_DIR:String = "android";
+    static var DIST_DIR:String    = "dist";
+
+    static function main()
+    {
+        project = Project.load();
+
+        parseArgs();
+        printHeader();
+        validateProject();
+
+        project.setMode(mode);
+
+        registerHooks();
+
+        switch (target)
+        {
+            case "desktop": buildDesktop();
+            case "android": buildAndroid();
+            case "all":     buildDesktop(); buildAndroid();
+            case "clean":   clean();
+            case "info":    printInfo();
+            case "validate": validateOnly();
+            default:        buildDesktop();
+        }
+    }
+
+    static function parseArgs()
+    {
+        var args = Sys.args();
+
+        for (arg in args)
+        {
+            switch (arg.toLowerCase())
+            {
+                case "desktop" | "android" | "all" | "clean" | "info" | "validate":
+                    target = arg.toLowerCase();
+
+                case "--release" | "-r":
+                    mode = RELEASE;
+
+                case "--debug" | "-d":
+                    mode = DEBUG;
+            }
+        }
+    }
+
+    static function printHeader()
+    {
+        Sys.println("===========================================");
+        Sys.println("  " + project.config.name + " v" + project.config.version);
+        Sys.println("  Build System | target=" + target + " mode=" + (mode == DEBUG ? "debug" : "release"));
+        Sys.println("===========================================");
+    }
+
+    static function printInfo()
+    {
+        Sys.println(project.info());
+        Sys.println("Sources registered: " + project.sources.length);
+        Sys.println("Assets registered:  " + project.assets.length);
+        Sys.println("Defines:            " + [for (k => v in project.defines) k + "=" + v].join(", "));
+    }
+
+    static function validateOnly()
+    {
+        var errors = project.validate();
+
+        if (errors.length == 0)
+        {
+            Sys.println("Project validation passed.");
+        }
+        else
+        {
+            for (err in errors)
+                Sys.stderr().writeString("[ERROR] " + err + "\n");
+
+            Sys.exit(1);
+        }
+    }
+
+    static function validateProject()
+    {
+        if (target == "info" || target == "clean")
+            return;
+
+        var errors = project.validate();
+
+        if (errors.length > 0)
+        {
+            for (err in errors)
+                Sys.stderr().writeString("[ERROR] " + err + "\n");
+
+            Sys.exit(1);
+        }
+    }
+
+    static function registerHooks()
+    {
+        project.onBefore("desktop", () -> {
+            ensureDir(BUILD_DIR);
+            ensureDir(OUTPUT_DIR);
+        });
+
+        project.onAfter("desktop", () -> {
+            Sys.println("Desktop build complete -> " + OUTPUT_DIR + "/" + jarName());
+        });
+
+        project.onBefore("android", () -> {
+            ensureDir(ANDROID_DIR + "/app/src/main/java/source/mobile");
+            ensureDir(ANDROID_DIR + "/app/src/main/res/drawable");
+            ensureDir(ANDROID_DIR + "/app/src/main/assets");
+
+            project.generateAndroidManifest(ANDROID_DIR + "/app/src/main/AndroidManifest.xml");
+            project.generateAppGradle(ANDROID_DIR + "/app/build.gradle");
+            project.generateProjectJson(ANDROID_DIR + "/app/src/main/assets/project.json");
+
+            generateRootGradle();
+            generateSettingsGradle();
+        });
+
+        project.onAfter("android", () -> {
+            Sys.println("Android build complete -> " + OUTPUT_DIR + "/" + apkName());
+        });
+    }
+
+    static function buildDesktop()
+    {
+        checkJava();
+        compileBuildScript();
+
+        project.runHooks("before:desktop");
+
+        var result = runJavaBuild("desktop");
+
+        if (result != 0)
+            abort("Desktop build failed.");
+
+        project.runHooks("after:desktop");
+    }
+
+    static function buildAndroid()
+    {
+        checkJava();
+        checkAndroid();
+        compileBuildScript();
+
+        project.runHooks("before:android");
+
+        copySharedSources();
+        copyAndroidAssets();
+        generateAndroidJavaSources();
+        generateGradleWrapper();
+
+        var result = Sys.command("bash", ["-c", "cd " + ANDROID_DIR + " && ./gradlew assembleDebug"]);
+
+        if (result != 0)
+            abort("Android build failed.");
+
+        var apkSrc  = ANDROID_DIR + "/app/build/outputs/apk/debug/app-debug.apk";
+        var apkDest = OUTPUT_DIR + "/" + apkName();
+
+        ensureDir(OUTPUT_DIR);
+        copyFile(apkSrc, apkDest);
+
+        project.runHooks("after:android");
+    }
+
+    static function clean()
+    {
+        Sys.println("Cleaning build artifacts...");
+
+        deleteDir(BUILD_DIR);
+        deleteDir(OUTPUT_DIR);
+        deleteDir(ANDROID_DIR);
+        deleteDir(DIST_DIR);
+
+        for (file in ["sources.txt", "build_sources.txt", "manifest.txt", "Build.class", "Project.class"])
+            if (FileSystem.exists(file))
+                FileSystem.deleteFile(file);
+
+        Sys.println("Clean complete.");
+    }
+
+    static function compileBuildScript()
+    {
+        var needsCompile = !FileSystem.exists("Build.class")
+            || isOutdated("Build.java", "Build.class")
+            || isOutdated("Project.java", "Build.class");
+
+        if (!needsCompile)
+            return;
+
+        Sys.println("Compiling build scripts...");
+
+        var sources = collectJavaSources(".", ["android", BUILD_DIR, OUTPUT_DIR, DIST_DIR]);
+
+        File.saveContent("build_sources.txt", sources.join("\n"));
+
+        var args = ["-encoding", "UTF-8", "@build_sources.txt"];
+
+        var result = Sys.command("javac", args);
+
+        FileSystem.deleteFile("build_sources.txt");
+
+        if (result != 0)
+            abort("Failed to compile build scripts.");
+    }
+
+    static function runJavaBuild(buildTarget:String):Int
+    {
+        return Sys.command("java", ["Build", buildTarget]);
+    }
+
+    static function copySharedSources()
+    {
+        copyFile("Project.java", ANDROID_DIR + "/app/src/main/java/Project.java");
+
+        var sourceDir = project.config.sourcePath.replace("/", "").replace("\\", "");
+
+        if (!FileSystem.exists(sourceDir))
+            return;
+
+        var files = collectJavaSources(sourceDir, []);
+
+        for (f in files)
+        {
+            if (Path.withoutDirectory(f) == "Main.java")
+                continue;
+
+            var rel  = f.substring(sourceDir.length + 1);
+            var dest = ANDROID_DIR + "/app/src/main/java/" + sourceDir + "/" + rel;
+
+            ensureDir(Path.directory(dest));
+            copyFile(f, dest);
+        }
+    }
+
+    static function copyAndroidAssets()
+    {
+        var androidAssets = [
+            { src: project.config.assetsPath, dest: ANDROID_DIR + "/app/src/main/assets" },
+            { src: "arts",                    dest: ANDROID_DIR + "/app/src/main/res/drawable" },
+            { src: "config.json",             dest: ANDROID_DIR + "/app/src/main/assets/config.json" }
+        ];
+
+        for (entry in androidAssets)
+        {
+            if (!FileSystem.exists(entry.src))
+                continue;
+
+            if (FileSystem.isDirectory(entry.src))
+                copyDir(entry.src, entry.dest);
+            else
+                copyFile(entry.src, entry.dest);
+        }
+    }
+
+    static function generateAndroidJavaSources()
+    {
+        writeFile(ANDROID_DIR + "/app/src/main/java/Scene.java",
+            'import android.graphics.Canvas;\n' +
+            'import android.view.KeyEvent;\n\n' +
+            'public class Scene\n' +
+            '{\n' +
+            '    public void update() {}\n' +
+            '    public void render(Canvas canvas) {}\n' +
+            '    public void keyPressed(int keyCode, KeyEvent event) {}\n' +
+            '    public void keyReleased(int keyCode, KeyEvent event) {}\n' +
+            '    public void touchDown(float x, float y, int pointer) {}\n' +
+            '    public void touchUp(float x, float y, int pointer) {}\n' +
+            '    public void touchDragged(float x, float y, int pointer) {}\n' +
+            '    public void onWindowClose() {}\n' +
+            '    public void destroy() {}\n' +
+            '}\n'
+        );
+
+        writeFile(ANDROID_DIR + "/app/src/main/java/Input.java",
+            'import java.util.HashSet;\n' +
+            'import java.util.Set;\n\n' +
+            'public class Input\n' +
+            '{\n' +
+            '    public float touchX;\n' +
+            '    public float touchY;\n\n' +
+            '    private final Set<Integer> keysDown         = new HashSet<>();\n' +
+            '    private final Set<Integer> keysJustPressed  = new HashSet<>();\n' +
+            '    private final Set<Integer> keysJustReleased = new HashSet<>();\n' +
+            '    private final Set<Integer> pointersDown     = new HashSet<>();\n\n' +
+            '    public void update() { keysJustPressed.clear(); keysJustReleased.clear(); }\n\n' +
+            '    public void onKeyPressed(int k) { if (!keysDown.contains(k)) keysJustPressed.add(k); keysDown.add(k); }\n' +
+            '    public void onKeyReleased(int k) { keysDown.remove(k); keysJustReleased.add(k); }\n' +
+            '    public void onTouchDown(float x, float y, int p) { touchX = x; touchY = y; pointersDown.add(p); }\n' +
+            '    public void onTouchUp(float x, float y, int p) { touchX = x; touchY = y; pointersDown.remove(p); }\n' +
+            '    public void onTouchDragged(float x, float y, int p) { touchX = x; touchY = y; }\n\n' +
+            '    public boolean isKeyDown(int k)        { return keysDown.contains(k); }\n' +
+            '    public boolean isKeyJustPressed(int k) { return keysJustPressed.contains(k); }\n' +
+            '    public boolean isKeyJustReleased(int k){ return keysJustReleased.contains(k); }\n' +
+            '    public boolean isTouching()            { return !pointersDown.isEmpty(); }\n' +
+            '    public boolean isTouching(int p)       { return pointersDown.contains(p); }\n\n' +
+            '    public void clear() { keysDown.clear(); keysJustPressed.clear(); keysJustReleased.clear(); pointersDown.clear(); }\n' +
+            '}\n'
+        );
+
+        writeFile(ANDROID_DIR + "/app/src/main/java/Main.java", generateAndroidMain());
+        writeFile(ANDROID_DIR + "/app/src/main/java/MainActivity.java", generateMainActivity());
+    }
+
+    static function generateAndroidMain():String
+    {
+        return
+            'import android.content.Context;\n' +
+            'import android.graphics.Canvas;\n' +
+            'import android.graphics.Color;\n' +
+            'import android.view.KeyEvent;\n' +
+            'import android.view.MotionEvent;\n' +
+            'import android.view.SurfaceHolder;\n' +
+            'import android.view.SurfaceView;\n\n' +
+            'import source.mobile.MobileSystem;\n\n' +
+            'public class Main extends SurfaceView implements SurfaceHolder.Callback, Runnable\n' +
+            '{\n' +
+            '    public static Main instance;\n' +
+            '    public static Project project;\n' +
+            '    public static int width;\n' +
+            '    public static int height;\n' +
+            '    public static int framerate;\n' +
+            '    public static boolean running;\n' +
+            '    public static boolean mobile  = true;\n' +
+            '    public static boolean focused = true;\n' +
+            '    public static boolean paused  = false;\n' +
+            '    public static long currentFrame;\n' +
+            '    public static long engineStartTime;\n' +
+            '    public static double deltaTime;\n' +
+            '    public static Scene currentScene;\n' +
+            '    public static Scene pendingScene;\n' +
+            '    public static final Input input = new Input();\n\n' +
+            '    private Thread gameThread;\n' +
+            '    private SurfaceHolder surfaceHolder;\n\n' +
+            '    static { project = new Project(); }\n\n' +
+            '    public Main(Context context)\n' +
+            '    {\n' +
+            '        super(context);\n' +
+            '        instance = this;\n' +
+            '        width     = project.width;\n' +
+            '        height    = project.height;\n' +
+            '        framerate = project.framerate;\n' +
+            '        running   = true;\n' +
+            '        engineStartTime = System.currentTimeMillis();\n' +
+            '        surfaceHolder = getHolder();\n' +
+            '        surfaceHolder.addCallback(this);\n' +
+            '        setFocusable(true);\n' +
+            '        setFocusableInTouchMode(true);\n' +
+            '        MobileSystem.initialize(width, height, project.landscapeMode, project.autoMobileScaling, project.touchControls, project.mobileShaders);\n' +
+            '        currentScene = new Scene();\n' +
+            '    }\n\n' +
+            '    @Override public void surfaceCreated(SurfaceHolder h) { running = true; gameThread = new Thread(this); gameThread.setDaemon(true); gameThread.setName("JackEngine-Loop"); gameThread.start(); }\n' +
+            '    @Override public void surfaceChanged(SurfaceHolder h, int f, int w, int hh) { width = w; height = hh; MobileSystem.resize(w, hh); }\n' +
+            '    @Override public void surfaceDestroyed(SurfaceHolder h) { running = false; try { gameThread.join(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); } }\n\n' +
+            '    @Override\n' +
+            '    public void run()\n' +
+            '    {\n' +
+            '        long targetNanos = 1_000_000_000L / framerate;\n' +
+            '        long lastTime = System.nanoTime();\n' +
+            '        double delta = 0;\n' +
+            '        while (running)\n' +
+            '        {\n' +
+            '            long now = System.nanoTime();\n' +
+            '            long elapsed = now - lastTime;\n' +
+            '            lastTime = now;\n' +
+            '            delta += elapsed / (double) targetNanos;\n' +
+            '            deltaTime = elapsed / 1_000_000_000.0;\n' +
+            '            if (delta >= 1)\n' +
+            '            {\n' +
+            '                delta = Math.min(delta - 1, 1);\n' +
+            '                if (!paused) { flushPendingScene(); input.update(); if (currentScene != null) currentScene.update(); }\n' +
+            '                render();\n' +
+            '                currentFrame++;\n' +
+            '            }\n' +
+            '            try { Thread.sleep(1); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }\n' +
+            '        }\n' +
+            '    }\n\n' +
+            '    private void flushPendingScene() { if (pendingScene == null) return; if (currentScene != null) currentScene.destroy(); currentScene = pendingScene; pendingScene = null; }\n\n' +
+            '    private void render()\n' +
+            '    {\n' +
+            '        Canvas canvas = surfaceHolder.lockCanvas();\n' +
+            '        if (canvas == null) return;\n' +
+            '        try\n' +
+            '        {\n' +
+            '            canvas.drawColor(Color.BLACK);\n' +
+            '            if (MobileSystem.autoScaling) { canvas.save(); canvas.translate(MobileSystem.offsetX, MobileSystem.offsetY); canvas.scale(MobileSystem.scale, MobileSystem.scale); }\n' +
+            '            if (currentScene != null) currentScene.render(canvas);\n' +
+            '            if (MobileSystem.autoScaling) canvas.restore();\n' +
+            '        }\n' +
+            '        finally { surfaceHolder.unlockCanvasAndPost(canvas); }\n' +
+            '    }\n\n' +
+            '    @Override\n' +
+            '    public boolean onKeyDown(int keyCode, KeyEvent event)\n' +
+            '    {\n' +
+            '        if (!paused) { input.onKeyPressed(keyCode); if (currentScene != null) currentScene.keyPressed(keyCode, event); }\n' +
+            '        return true;\n' +
+            '    }\n\n' +
+            '    @Override\n' +
+            '    public boolean onKeyUp(int keyCode, KeyEvent event)\n' +
+            '    {\n' +
+            '        input.onKeyReleased(keyCode); if (currentScene != null) currentScene.keyReleased(keyCode, event); return true;\n' +
+            '    }\n\n' +
+            '    @Override\n' +
+            '    public boolean onTouchEvent(MotionEvent event)\n' +
+            '    {\n' +
+            '        if (paused) return true;\n' +
+            '        int action = event.getActionMasked();\n' +
+            '        int index  = event.getActionIndex();\n' +
+            '        int pointer = event.getPointerId(index);\n' +
+            '        float x = event.getX(index);\n' +
+            '        float y = event.getY(index);\n' +
+            '        if (action == MotionEvent.ACTION_DOWN || action == MotionEvent.ACTION_POINTER_DOWN)\n' +
+            '        {\n' +
+            '            MobileSystem.onTouchDown(pointer, x, y); input.onTouchDown(x, y, pointer);\n' +
+            '            if (currentScene != null) currentScene.touchDown(MobileSystem.toScreenX(x), MobileSystem.toScreenY(y), pointer);\n' +
+            '        }\n' +
+            '        else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_POINTER_UP)\n' +
+            '        {\n' +
+            '            MobileSystem.onTouchUp(pointer, x, y); input.onTouchUp(x, y, pointer);\n' +
+            '            if (currentScene != null) currentScene.touchUp(MobileSystem.toScreenX(x), MobileSystem.toScreenY(y), pointer);\n' +
+            '        }\n' +
+            '        else if (action == MotionEvent.ACTION_MOVE)\n' +
+            '        {\n' +
+            '            for (int i = 0; i < event.getPointerCount(); i++)\n' +
+            '            {\n' +
+            '                int pid = event.getPointerId(i); float px = event.getX(i); float py = event.getY(i);\n' +
+            '                MobileSystem.onTouchDragged(pid, px, py); input.onTouchDragged(px, py, pid);\n' +
+            '                if (currentScene != null) currentScene.touchDragged(MobileSystem.toScreenX(px), MobileSystem.toScreenY(py), pid);\n' +
+            '            }\n' +
+            '        }\n' +
+            '        else if (action == MotionEvent.ACTION_CANCEL) { MobileSystem.clearPointers(); input.clear(); }\n' +
+            '        return true;\n' +
+            '    }\n\n' +
+            '    public static void switchScene(Scene s)  { pendingScene = s; }\n' +
+            '    public static void pause()               { paused = true; }\n' +
+            '    public static void resume()              { paused = false; }\n' +
+            '    public static long getEngineUptime()     { return System.currentTimeMillis() - engineStartTime; }\n' +
+            '    public static double getDeltaTime()      { return deltaTime; }\n' +
+            '    public static void shutdown()            { running = false; }\n' +
+            '}\n';
+    }
+
+    static function generateMainActivity():String
+    {
+        return
+            'import android.app.Activity;\n' +
+            'import android.os.Bundle;\n' +
+            'import android.view.Window;\n' +
+            'import android.view.WindowManager;\n\n' +
+            'public class MainActivity extends Activity\n' +
+            '{\n' +
+            '    @Override\n' +
+            '    protected void onCreate(Bundle savedInstanceState)\n' +
+            '    {\n' +
+            '        super.onCreate(savedInstanceState);\n' +
+            '        requestWindowFeature(Window.FEATURE_NO_TITLE);\n' +
+            '        getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);\n' +
+            '        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);\n' +
+            '        setContentView(new Main(this));\n' +
+            '    }\n\n' +
+            '    @Override protected void onPause() { super.onPause(); Main.running = false; Main.focused = false; Main.paused = true; Main.input.clear(); }\n' +
+            '    @Override protected void onResume() { super.onResume(); Main.running = true; Main.focused = true; Main.paused = false; if (Main.instance != null) Main.instance.getHolder().addCallback(Main.instance); }\n' +
+            '    @Override protected void onDestroy() { super.onDestroy(); if (Main.currentScene != null) Main.currentScene.onWindowClose(); Main.shutdown(); }\n' +
+            '}\n';
+    }
+
+    static function generateRootGradle()
+    {
+        writeFile(ANDROID_DIR + "/build.gradle",
+            'buildscript {\n' +
+            '    repositories { google(); mavenCentral() }\n' +
+            '    dependencies { classpath \'com.android.tools.build:gradle:' + project.android.agpVersion + '\' }\n' +
+            '}\n\n' +
+            'allprojects {\n' +
+            '    repositories { google(); mavenCentral() }\n' +
+            '}\n'
+        );
+    }
+
+    static function generateSettingsGradle()
+    {
+        writeFile(ANDROID_DIR + "/settings.gradle",
+            'pluginManagement {\n' +
+            '    repositories { google(); mavenCentral(); gradlePluginPortal() }\n' +
+            '}\n\n' +
+            'rootProject.name = \'' + project.config.name.replace(" ", "") + '\'\n' +
+            'include \':app\'\n'
+        );
+    }
+
+    static function generateGradleWrapper()
+    {
+        Sys.command("gradle", ["wrapper", "--gradle-version", project.android.gradleVersion, "-p", ANDROID_DIR]);
+        Sys.command("chmod", ["+x", ANDROID_DIR + "/gradlew"]);
+    }
+
+    static function collectJavaSources(dir:String, exclude:Array<String>):Array<String>
+    {
+        var result:Array<String> = [];
+
+        if (!FileSystem.exists(dir))
+            return result;
+
+        for (entry in FileSystem.readDirectory(dir))
+        {
+            if (exclude.contains(entry))
+                continue;
+
+            var path = dir + "/" + entry;
+
+            if (FileSystem.isDirectory(path))
+                result = result.concat(collectJavaSources(path, exclude));
+            else if (entry.endsWith(".java"))
+                result.push(path);
+        }
+
+        return result;
+    }
+
+    static function checkJava()
+    {
+        if (Sys.command("javac", ["--version"]) != 0)
+            abort("javac not found. Install JDK 21 or later.");
+    }
+
+    static function checkAndroid()
+    {
+        var androidHome = Sys.getEnv("ANDROID_HOME");
+
+        if (androidHome == null || !FileSystem.exists(androidHome))
+            abort("ANDROID_HOME is not set or does not exist.");
+
+        if (Sys.command("gradle", ["--version"]) != 0)
+            abort("Gradle not found. Install Gradle " + project.android.gradleVersion + " or later.");
+    }
+
+    static function isOutdated(source:String, output:String):Bool
+    {
+        if (!FileSystem.exists(output))
+            return true;
+
+        return FileSystem.stat(source).mtime.getTime() > FileSystem.stat(output).mtime.getTime();
+    }
+
+    static function jarName():String
+    {
+        return project.config.name.replace(" ", "") + ".jar";
+    }
+
+    static function apkName():String
+    {
+        return project.config.name.replace(" ", "") + "-" + project.config.version + ".apk";
+    }
+
+    static function ensureDir(path:String)
+    {
+        if (!FileSystem.exists(path))
+            FileSystem.createDirectory(path);
+    }
+
+    static function copyFile(src:String, dest:String)
+    {
+        if (!FileSystem.exists(src))
+            return;
+
+        ensureDir(Path.directory(dest));
+        File.saveBytes(dest, File.getBytes(src));
+    }
+
+    static function copyDir(src:String, dest:String)
+    {
+        if (!FileSystem.exists(src))
+            return;
+
+        ensureDir(dest);
+
+        for (entry in FileSystem.readDirectory(src))
+        {
+            var srcPath  = src + "/" + entry;
+            var destPath = dest + "/" + entry;
+
+            if (FileSystem.isDirectory(srcPath))
+                copyDir(srcPath, destPath);
+            else
+                copyFile(srcPath, destPath);
+        }
+    }
+
+    static function deleteDir(path:String)
+    {
+        if (!FileSystem.exists(path))
+            return;
+
+        if (FileSystem.isDirectory(path))
+        {
+            for (entry in FileSystem.readDirectory(path))
+                deleteDir(path + "/" + entry);
+
+            FileSystem.deleteDirectory(path);
+        }
+        else
+        {
+            FileSystem.deleteFile(path);
+        }
+    }
+
+    static function writeFile(path:String, content:String)
+    {
+        ensureDir(Path.directory(path));
+        File.saveContent(path, content);
+    }
+
+    static function abort(message:String)
+    {
+        Sys.stderr().writeString("[Build] ERROR: " + message + "\n");
+        Sys.exit(1);
+    }
+}
